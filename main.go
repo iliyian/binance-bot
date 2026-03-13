@@ -2,9 +2,11 @@ package main
 
 import (
 	"flag"
+	"io"
 	"log"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/iliyian/binance-bot/binance"
@@ -18,9 +20,8 @@ func main() {
 	runOnce := flag.Bool("once", false, "立即执行一次定投（不启动定时任务）")
 	flag.Parse()
 
-	// 设置日志格式
-	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
-	log.SetPrefix("[binance-bot] ")
+	// 初始化日志
+	setupLog()
 
 	log.Println("🚀 币安自动定投机器人启动中...")
 
@@ -112,4 +113,30 @@ func main() {
 		bot.Stop()
 	}
 	log.Println("👋 已安全退出")
+}
+
+func setupLog() {
+	// 设置日志格式
+	log.SetFlags(log.Ldate | log.Ltime | log.Lmsgprefix)
+	log.SetPrefix("[binance-bot] ")
+
+	logDir := "logs"
+	logFile := filepath.Join(logDir, "app.log")
+
+	// 确保日志目录存在
+	if err := os.MkdirAll(logDir, 0755); err != nil {
+		log.Printf("⚠️ 无法创建日志目录: %v", err)
+		return
+	}
+
+	// 打开日志文件（追加模式）
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Printf("⚠️ 无法打开日志文件: %v", err)
+		return
+	}
+
+	// 同时输出到控制台和文件
+	multiWriter := io.MultiWriter(os.Stdout, f)
+	log.SetOutput(multiWriter)
 }
