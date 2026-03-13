@@ -19,7 +19,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w
 # ===== 运行阶段 =====
 FROM alpine:3.19
 
-RUN apk add --no-cache ca-certificates tzdata
+RUN apk add --no-cache ca-certificates tzdata su-exec
 
 # 创建非 root 用户
 RUN adduser -D -g '' appuser
@@ -29,7 +29,12 @@ WORKDIR /app
 # 从构建阶段复制二进制文件
 COPY --from=builder /app/binance-bot .
 
-# 使用非 root 用户
-USER appuser
+# 复制 entrypoint 脚本
+COPY entrypoint.sh .
+RUN chmod +x entrypoint.sh
 
-ENTRYPOINT ["./binance-bot"]
+# 创建日志目录并赋予 appuser 权限
+RUN mkdir -p /app/logs && chown appuser:appuser /app/logs
+
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["./binance-bot"]
