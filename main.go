@@ -33,6 +33,7 @@ func main() {
 
 	log.Printf("📋 交易对: %v", cfg.TradePairs)
 	log.Printf("💰 投入金额: %v USDT", cfg.TradeAmounts)
+	log.Printf("🏊 初始 Pool: %v USDT", cfg.PoolAmounts)
 	log.Printf("⏰ 定时规则: %s", cfg.CronSchedule)
 	log.Printf("🌍 时区: %s", cfg.Timezone.String())
 	if cfg.AutoEarn {
@@ -77,6 +78,11 @@ func main() {
 	// 创建调度器
 	sched := scheduler.New(cfg, client, notifier)
 
+	// 将 pool 查询回调连接到 Telegram Bot
+	if bot != nil {
+		bot.SetPoolGetter(sched.GetPool)
+	}
+
 	// 如果是单次执行模式
 	if *runOnce {
 		log.Println("🔔 单次执行模式")
@@ -97,7 +103,7 @@ func main() {
 
 	// 发送启动通知
 	if notifier != nil {
-		notifier.SendStartupNotice(cfg.TradePairs, cfg.TradeAmounts, cfg.CronSchedule)
+		notifier.SendStartupNotice(cfg.TradePairs, cfg.TradeAmounts, cfg.CronSchedule, cfg.PoolAmounts)
 	}
 
 	log.Println("✅ 机器人运行中，按 Ctrl+C 退出")

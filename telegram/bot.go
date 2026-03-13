@@ -15,13 +15,17 @@ import (
 	"github.com/iliyian/binance-bot/binance"
 )
 
+// PoolGetter 获取当前 pool 状态的回调函数类型
+type PoolGetter func() map[string]float64
+
 // Bot Telegram Bot 命令处理器
 type Bot struct {
-	botToken string
-	chatID   string
-	client   *http.Client
-	binance  *binance.Client
-	cancel   context.CancelFunc
+	botToken   string
+	chatID     string
+	client     *http.Client
+	binance    *binance.Client
+	cancel     context.CancelFunc
+	poolGetter PoolGetter
 }
 
 // TelegramUpdate Telegram 更新结构
@@ -83,6 +87,11 @@ func NewBot(botToken, chatID string, binanceClient *binance.Client) *Bot {
 	}
 }
 
+// SetPoolGetter 设置 pool 数据获取回调
+func (b *Bot) SetPoolGetter(getter PoolGetter) {
+	b.poolGetter = getter
+}
+
 // Start 启动 Bot 长轮询
 func (b *Bot) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -115,6 +124,7 @@ func (b *Bot) registerCommands() error {
 		{Command: "spot", Description: "查询现货账户余额"},
 		{Command: "earn", Description: "查询活期理财持仓"},
 		{Command: "asset", Description: "查询指定币种余额，用法: /asset BTC"},
+		{Command: "pool", Description: "查询各交易对的 Pool 累积金额"},
 		{Command: "help", Description: "显示帮助信息"},
 	}
 
@@ -235,6 +245,8 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		b.handleEarn()
 	case "/asset":
 		b.handleAsset(args)
+	case "/pool":
+		b.handlePool()
 	case "/help", "/start":
 		b.handleHelp()
 	default:
@@ -444,6 +456,46 @@ func (b *Bot) handleAsset(args []string) {
 	b.sendReply(sb.String())
 }
 
+// handlePool 处理 /pool 命令 — 查询各交易对的 Pool 累积金额
+func (b *Bot) handlePool() {
+	var sb strings.Builder
+	sb.WriteString("🏊 <b>Pool 累积金额</b>\n")
+	sb.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	if b.poolGetter == nil {
+		sb.WriteString("⚠️ Pool 功能未初始化\n")
+		b.sendReply(sb.String())
+		return
+	}
+
+	pool := b.poolGetter()
+	if len(pool) == 0 {
+		sb.WriteString("(所有交易对 Pool 均为 0)\n")
+		b.sendReply(sb.String())
+		return
+	}
+
+	totalPool := 0.0
+	hasNonZero := false
+	for pair, amount := range pool {
+		if amount > 0 {
+			hasNonZero = true
+		}
+		totalPool += amount
+		sb.WriteString(fmt.Sprintf("• <b>%s</b>: %.8f USDT\n", pair, amount))
+	}
+
+	if !hasNonZero {
+		sb.WriteString("\n(所有交易对 Pool 均为 0)\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("\n💰 Pool 合计: %.8f USDT\n", totalPool))
+	}
+
+	sb.WriteString("\n💡 <i>Pool 会在每次定投时自动叠加到定投金额上</i>")
+
+	b.sendReply(sb.String())
+}
+
 // handleHelp 处理 /help 命令
 func (b *Bot) handleHelp() {
 	text := `🤖 <b>币安定投机器人 — 命令列表</b>
@@ -454,6 +506,7 @@ func (b *Bot) handleHelp() {
 /asset &lt;币种&gt; — 查询指定币种余额
   例: <code>/asset BTC</code>
   例: <code>/asset USDT</code>
+/pool — 查询各交易对的 Pool 累积金额
 /help — 显示此帮助信息`
 
 	b.sendReply(text)

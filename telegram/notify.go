@@ -14,6 +14,15 @@ import (
 	"github.com/iliyian/binance-bot/binance"
 )
 
+// PoolInfo 记录每个交易对的 pool 变化信息（从 scheduler 包导入会循环依赖，这里定义接口）
+type PoolInfo struct {
+	Pair       string  // 交易对
+	PoolBefore float64 // 交易前的 pool 值
+	PoolAfter  float64 // 交易后的 pool 值
+	Intended   float64 // 本次意图交易金额 (配置金额 + pool)
+	Actual     float64 // 实际花费金额
+}
+
 // Notifier Telegram 通知器
 type Notifier struct {
 	botToken string
@@ -62,7 +71,7 @@ func (n *Notifier) sendMessage(text string) error {
 }
 
 // SendTradeReport 发送定投交易报告
-func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult) {
+func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult, poolInfos []PoolInfo) {
 	var sb strings.Builder
 
 	sb.WriteString("🤖 <b>币安自动定投报告</b>\n")
@@ -84,7 +93,7 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 	successCount := 0
 	failCount := 0
 
-	for _, r := range results {
+	for i, r := range results {
 		if r.Error != nil {
 			failCount++
 			sb.WriteString(fmt.Sprintf("❌ <b>%s</b> — 失败\n", r.Symbol))
@@ -98,8 +107,20 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 			if r.Commission != "" {
 				sb.WriteString(fmt.Sprintf("   💸 手续费: %s\n", r.Commission))
 			}
-			sb.WriteString(fmt.Sprintf("   🔖 订单ID: %d\n\n", r.OrderID))
+			sb.WriteString(fmt.Sprintf("   🔖 订单ID: %d\n", r.OrderID))
 		}
+		// 显示 pool 信息
+		if i < len(poolInfos) {
+			pi := poolInfos[i]
+			if pi.PoolBefore > 0 || pi.PoolAfter > 0 {
+				sb.WriteString(fmt.Sprintf("   🏊 Pool: %.8f → %.8f USDT\n", pi.PoolBefore, pi.PoolAfter))
+			}
+			if pi.Intended > 0 && r.Error == nil {
+				sb.WriteString(fmt.Sprintf("   🎯 目标: %.8f, 实际: %.8f, 差额: %.8f\n",
+					pi.Intended, pi.Actual, pi.Intended-pi.Actual))
+			}
+		}
+		sb.WriteString("\n")
 	}
 
 	// 理财申购信息
@@ -121,6 +142,23 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 		sb.WriteString(fmt.Sprintf("💳 USDT 余额: %s\n", balance))
 	}
 
+	// 汇总 pool 信息
+	hasPool := false
+	for _, pi := range poolInfos {
+		if pi.PoolAfter > 0 {
+			hasPool = true
+			break
+		}
+	}
+	if hasPool {
+		sb.WriteString("\n🏊 <b>Pool 累积:</b>\n")
+		for _, pi := range poolInfos {
+			if pi.PoolAfter > 0 {
+				sb.WriteString(fmt.Sprintf("   • %s: %.8f USDT\n", pi.Pair, pi.PoolAfter))
+			}
+		}
+	}
+
 	msg := sb.String()
 
 	if err := n.sendMessage(msg); err != nil {
@@ -131,7 +169,7 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 }
 
 // SendStartupNotice 发送启动通知
-func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr string) {
+func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr string, poolAmounts []float64) {
 	var sb strings.Builder
 
 	sb.WriteString("🚀 <b>币安自动定投已启动</b>\n\n")
@@ -142,7 +180,28 @@ func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr 
 		if i < len(amounts) {
 			amount = amounts[i]
 		}
-		sb.WriteString(fmt.Sprintf("  • %s — %s USDT\n", pair, amount))
+		poolStr := ""
+		if i < len(poolAmounts) && poolAmounts[i] > 0 {
+			poolStr = fmt.Sprintf(" (Pool: %.8f)", poolAmounts[i])
+		}
+		sb.WriteString(fmt.Sprintf("  • %s — %s USDT%s\n", pair, amount, poolStr))
+	}
+
+	// 如果有任何非零 pool，汇总显示
+	hasPool := false
+	for _, p := range poolAmounts {
+		if p > 0 {
+			hasPool = true
+			break
+		}
+	}
+	if hasPool {
+		sb.WriteString("\n🏊 <b>初始 Pool:</b>\n")
+		for i, pair := range pairs {
+			if i < len(poolAmounts) && poolAmounts[i] > 0 {
+				sb.WriteString(fmt.Sprintf("  • %s — %.8f USDT\n", pair, poolAmounts[i]))
+			}
+		}
 	}
 
 	sb.WriteString(fmt.Sprintf("\n⏰ 定时规则: <code>%s</code>\n", cronExpr))

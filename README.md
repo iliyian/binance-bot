@@ -10,7 +10,8 @@
 
 - 📊 **多交易对定投** — 支持同时定投多个币种 (BTC、ETH、SOL 等)
 - ⏰ **灵活定时** — 基于 cron 表达式配置执行时间，支持秒级精度
-- 📱 **Telegram 通知** — 交易完成后自动推送详细报告
+- 🏊 **Pool 差额累积** — 自动累积最小交易金额限制导致的差额，下次定投时补足
+- 📱 **Telegram 通知** — 交易完成后自动推送详细报告（含 Pool 状态）
 - 🐳 **Docker 部署** — 支持 Docker / Docker Compose 一键部署
 - 🔒 **安全运行** — 容器内非 root 用户运行，配置与代码分离
 - 🧪 **测试网支持** — 可切换币安测试网进行功能验证
@@ -102,6 +103,7 @@ go build -o binance-bot .
 | `BINANCE_SECRET_KEY` | ✅ | 币安 API Secret | `def456...` |
 | `TRADE_PAIRS` | ✅ | 交易对，逗号分隔 | `BTCUSDT,ETHUSDT` |
 | `TRADE_AMOUNTS` | ✅ | 每个交易对金额(USDT) | `10,5` |
+| `POOL_AMOUNTS` | ❌ | 初始Pool金额(USDT)，重启恢复用 | `0.5,0.3` |
 | `CRON_SCHEDULE` | ❌ | 定时规则 (6位cron) | `0 0 9 * * *` |
 | `TIMEZONE` | ❌ | 时区 | `Asia/Shanghai` |
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:ABC...` |
@@ -138,10 +140,12 @@ go build -o binance-bot .
 📅 2024-01-15 09:00:03
 
 ✅ BTCUSDT — 成功
-   💰 花费: 10.00 USDT
+   💰 花费: 9.99 USDT
    📦 获得: 0.00023400
    📈 均价: 42735.04273504
    🔖 订单ID: 123456789
+   🏊 Pool: 0.00000000 → 0.01000000 USDT
+   🎯 目标: 10.00000000, 实际: 9.99000000, 差额: 0.01000000
 
 ✅ ETHUSDT — 成功
    💰 花费: 5.00 USDT
@@ -152,6 +156,9 @@ go build -o binance-bot .
 ━━━━━━━━━━━━━━━━━━
 📊 成功: 2 | 失败: 0
 💳 USDT 余额: 985.00 (可用: 985.00, 冻结: 0.00)
+
+🏊 Pool 累积:
+   • BTCUSDT: 0.01000000 USDT
 ```
 
 ## 🔧 运维命令
@@ -169,6 +176,17 @@ sudo systemctl restart binance-bot   # 重启
 sudo journalctl -u binance-bot -f    # 查看日志
 ```
 
+## 🏊 Pool 差额累积
+
+由于币安存在最小交易金额限制，每次定投实际扣除的金额可能略小于设定金额。Pool 功能会自动累积这些差额：
+
+1. **自动累积**：每次定投后，`差额 = 目标金额 - 实际花费`，差额自动存入该交易对的 Pool
+2. **自动叠加**：下次定投时，Pool 中的金额会加到配置金额上，确保长期投入不丢失任何资金
+3. **重启恢复**：Pool 存储在内存中，重启后需通过 `POOL_AMOUNTS` 环境变量恢复（查看最近一次 Telegram 通知中的 Pool 值）
+4. **Telegram 通知**：每次定投报告和启动通知中都会包含 Pool 状态
+
+**示例**：配置定投 10 USDT 买 BTC，但币安最小精度导致实际花费 9.99 USDT，则 0.01 USDT 进入 Pool。下次定投实际金额为 10.01 USDT。
+
 ## ⚠️ 注意事项
 
 1. **API 权限**：只需开启「现货交易」权限，无需开启提现权限
@@ -176,6 +194,7 @@ sudo journalctl -u binance-bot -f    # 查看日志
 3. **最小金额**：币安市价单最小金额通常为 **5 USDT**，部分交易对可能更高
 4. **资金安全**：确保 `.env` 文件权限为 `600`，不要提交到 Git 仓库
 5. **测试验证**：首次使用建议先开启 `USE_TESTNET=true` 进行测试
+6. **Pool 恢复**：重启服务后，记得从最近一次 Telegram 通知中获取 Pool 值并设置 `POOL_AMOUNTS`
 
 ## 📄 License
 

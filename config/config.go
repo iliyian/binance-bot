@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -16,9 +17,10 @@ type Config struct {
 	BinanceSecretKey string
 
 	// 定投配置
-	TradePairs   []string // 交易对列表
-	TradeAmounts []string // 对应金额列表 (字符串保留精度)
-	CronSchedule string   // cron 表达式
+	TradePairs   []string   // 交易对列表
+	TradeAmounts []string   // 对应金额列表 (字符串保留精度)
+	PoolAmounts  []float64  // 每个交易对的初始 pool 值 (用于重启恢复)
+	CronSchedule string     // cron 表达式
 	Timezone     *time.Location
 
 	// Telegram 通知
@@ -106,6 +108,23 @@ func Load() (*Config, error) {
 	cfg.LogLevel = os.Getenv("LOG_LEVEL")
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
+	}
+
+	// 初始 Pool 金额（可选，用于重启后恢复累积的 pool）
+	poolStr := os.Getenv("POOL_AMOUNTS")
+	cfg.PoolAmounts = make([]float64, len(cfg.TradePairs))
+	if poolStr != "" {
+		poolParts := strings.Split(poolStr, ",")
+		for i, p := range poolParts {
+			if i >= len(cfg.TradePairs) {
+				break
+			}
+			val, err := strconv.ParseFloat(strings.TrimSpace(p), 64)
+			if err != nil {
+				return nil, fmt.Errorf("POOL_AMOUNTS 第 %d 个值无效: %s", i+1, p)
+			}
+			cfg.PoolAmounts[i] = val
+		}
 	}
 
 	// 配置冲突检查
