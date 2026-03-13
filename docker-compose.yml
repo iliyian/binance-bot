@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   binance-bot:
     image: ghcr.io/iliyian/binance-bot:latest
