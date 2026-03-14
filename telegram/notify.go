@@ -63,7 +63,7 @@ func (n *Notifier) sendMessage(text string) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return fmt.Errorf("Telegram API 返回错误 %d: %s", resp.StatusCode, string(respBody))
 	}
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -32,10 +33,11 @@ type TradeResult struct {
 
 // Client 币安交易客户端
 type Client struct {
-	client    *gobinance.Client
-	apiKey    string
-	secretKey string
-	debug     bool
+	client     *gobinance.Client
+	httpClient *http.Client
+	apiKey     string
+	secretKey  string
+	debug      bool
 }
 
 // SetDebug 设置调试模式
@@ -68,7 +70,12 @@ func NewClient(apiKey, secretKey string, useDemo, useTestnet bool, baseURL strin
 		log.Printf("🔗 使用模拟交易 API: %s", DemoBaseURL)
 	}
 
-	c := &Client{client: client, apiKey: apiKey, secretKey: secretKey}
+	c := &Client{
+		client:     client,
+		httpClient: &http.Client{Timeout: 30 * time.Second},
+		apiKey:     apiKey,
+		secretKey:  secretKey,
+	}
 
 	// 启动时同步服务器时间
 	if err := c.SyncServerTime(); err != nil {

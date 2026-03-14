@@ -136,7 +136,7 @@ func setupLog() {
 	}
 
 	// 打开日志文件（追加模式）
-	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		log.Printf("⚠️ 无法打开日志文件: %v", err)
 		return

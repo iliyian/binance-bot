@@ -146,7 +146,7 @@ func (b *Bot) registerCommands() error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		return fmt.Errorf("注册命令 API 错误 %d: %s", resp.StatusCode, string(respBody))
 	}
 
@@ -192,7 +192,7 @@ func (b *Bot) getUpdates(offset, timeout int) ([]TelegramUpdate, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +278,7 @@ func (b *Bot) sendReply(text string) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 		log.Printf("❌ 发送回复 API 错误 %d: %s", resp.StatusCode, string(respBody))
 	}
 }

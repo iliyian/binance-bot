@@ -64,8 +64,6 @@ echo -e "${GREEN}✅ .env 文件已存在${NC}"
 # ---- 验证必要配置 ----
 echo -e "\n${YELLOW}🔍 验证配置...${NC}"
 
-source .env 2>/dev/null || true
-
 missing=0
 for var in BINANCE_API_KEY BINANCE_SECRET_KEY TRADE_PAIRS TRADE_AMOUNTS; do
     val=$(grep "^${var}=" .env | cut -d'=' -f2-)
