@@ -126,13 +126,13 @@ func (c *Client) signedRequest(ctx context.Context, method, endpoint string, par
 
 	req.Header.Set("X-MBX-APIKEY", c.apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求失败: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
 		return nil, fmt.Errorf("读取响应失败: %w", err)
 	}
