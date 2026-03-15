@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -75,6 +76,11 @@ func NewClient(apiKey, secretKey string, useDemo, useTestnet bool, baseURL strin
 		log.Printf("⚠️ 初始时间同步失败: %v（将在交易前重试）", err)
 	}
 
+	// 启用 BNB 抵扣手续费
+	if err := c.EnableBNBBurn(); err != nil {
+		log.Printf("⚠️ 启用 BNB 抵扣手续费失败: %v", err)
+	}
+
 	return c
 }
 
@@ -135,12 +141,35 @@ func (c *Client) ExecuteMarketBuy(ctx context.Context, symbol, quoteAmount strin
 			comm, _ := strconv.ParseFloat(fill.Commission, 64)
 			commissionMap[fill.CommissionAsset] += comm
 		}
-		// 构建手续费字符串
+		// 构建手续费字符串（按资产名排序，确保输出稳定）
+		commAssets := make([]string, 0, len(commissionMap))
+		for asset := range commissionMap {
+			commAssets = append(commAssets, asset)
+		}
+		sort.Strings(commAssets)
+
 		var commParts []string
-		for asset, amount := range commissionMap {
+		totalCommUSDT := 0.0
+		hasBNBComm := false
+		for _, asset := range commAssets {
+			amount := commissionMap[asset]
 			commParts = append(commParts, fmt.Sprintf("%s %s", strconv.FormatFloat(amount, 'f', -1, 64), asset))
+			// 如果手续费是 BNB，查询 BNBUSDT 价格并计算 USDT 等值
+			if asset == "BNB" {
+				hasBNBComm = true
+				if bnbPrice, err := c.GetSymbolPrice(ctx, "BNBUSDT"); err == nil {
+					totalCommUSDT += amount * bnbPrice
+				}
+			} else if asset == "USDT" {
+				totalCommUSDT += amount
+			}
 		}
 		result.Commission = strings.Join(commParts, " + ")
+		// 如果手续费包含 BNB，附加 USDT 等值
+		if hasBNBComm && totalCommUSDT > 0 {
+			commUSDT := fmt.Sprintf("≈ %s USDT", strconv.FormatFloat(totalCommUSDT, 'f', 8, 64))
+			result.Commission = fmt.Sprintf("%s (%s)", result.Commission, commUSDT)
+		}
 		// 记录主要手续费资产
 		if len(commissionMap) == 1 {
 			for asset := range commissionMap {
@@ -301,4 +330,48 @@ func (c *Client) GetSpotBalance(ctx context.Context, asset string) (*AssetBalanc
 	}
 
 	return &AssetBalance{Asset: asset}, nil
+}
+
+// GetSymbolPrice 获取指定交易对的最新市场价格
+func (c *Client) GetSymbolPrice(ctx context.Context, symbol string) (float64, error) {
+	prices, err := c.client.NewListPricesService().Symbol(symbol).Do(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("查询 %s 价格失败: %w", symbol, err)
+	}
+	if len(prices) == 0 {
+		return 0, fmt.Errorf("未找到 %s 价格数据", symbol)
+	}
+	price, err := strconv.ParseFloat(prices[0].Price, 64)
+	if err != nil {
+		return 0, fmt.Errorf("解析 %s 价格失败: %w", symbol, err)
+	}
+	return price, nil
+}
+
+// EnableBNBBurn 启用使用 BNB 支付现货交易手续费（可享受手续费折扣）
+func (c *Client) EnableBNBBurn() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// 先查询当前 BNB 抵扣状态
+	burnStatus, err := c.client.NewGetBNBBurnService().Do(ctx)
+	if err != nil {
+		return fmt.Errorf("查询 BNB 抵扣状态失败: %w", err)
+	}
+
+	if burnStatus.SpotBNBBurn {
+		log.Printf("🔥 BNB 抵扣手续费已开启（现货: ✅）")
+		return nil
+	}
+
+	// 开启现货交易 BNB 抵扣
+	result, err := c.client.NewToggleBNBBurnService().
+		SpotBNBBurn(true).
+		Do(ctx)
+	if err != nil {
+		return fmt.Errorf("开启 BNB 抵扣失败: %w", err)
+	}
+
+	log.Printf("🔥 BNB 抵扣手续费设置完成（现货: %v）", result.SpotBNBBurn)
+	return nil
 }
