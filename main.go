@@ -81,6 +81,7 @@ func main() {
 	// 将 pool 查询回调连接到 Telegram Bot
 	if bot != nil {
 		bot.SetPoolGetter(sched.GetPool)
+		bot.SetAmountUpdater(cfg.UpdateTradeAmount)
 	}
 
 	// 如果是单次执行模式

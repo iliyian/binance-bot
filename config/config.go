@@ -5,6 +5,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/joho/godotenv"
@@ -17,10 +18,10 @@ type Config struct {
 	BinanceSecretKey string
 
 	// 定投配置
-	TradePairs   []string   // 交易对列表
-	TradeAmounts []string   // 对应金额列表 (字符串保留精度)
-	PoolAmounts  []float64  // 每个交易对的初始 pool 值 (用于重启恢复)
-	CronSchedule string     // cron 表达式
+	TradePairs   []string      // 交易对列表
+	TradeAmounts []string      // 对应金额列表 (字符串保留精度)
+	PoolAmounts  []float64     // 每个交易对的初始 pool 值 (用于重启恢复)
+	CronSchedule string        // cron 表达式
 	Timezone     *time.Location
 
 	// Telegram 通知
@@ -33,6 +34,8 @@ type Config struct {
 	BinanceBaseURL string // 自定义 API 地址，最高优先级
 	AutoEarn       bool   // 自动与活期理财互转
 	LogLevel       string
+
+	mu sync.Mutex // 保护 TradeAmounts 并发写入
 }
 
 // Load 从 .env 文件加载配置
@@ -138,4 +141,47 @@ func Load() (*Config, error) {
 // HasTelegram 检查是否配置了 Telegram 通知
 func (c *Config) HasTelegram() bool {
 	return c.TelegramBotToken != "" && c.TelegramChatID != ""
+}
+
+// UpdateTradeAmount 更新指定交易对的定投金额（同时保存到 .env 文件）
+func (c *Config) UpdateTradeAmount(pair string, amount string) error {
+	// 验证金额
+	val, err := strconv.ParseFloat(strings.TrimSpace(amount), 64)
+	if err != nil || val <= 0 {
+		return fmt.Errorf("无效金额: %s", amount)
+	}
+
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// 查找交易对索引
+	idx := -1
+	for i, p := range c.TradePairs {
+		if strings.EqualFold(strings.TrimSpace(p), strings.TrimSpace(pair)) {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return fmt.Errorf("交易对 %s 未在配置中找到", pair)
+	}
+
+	// 更新内存中的值
+	c.TradeAmounts[idx] = strings.TrimSpace(amount)
+
+	// 保存到 .env 文件
+	return c.saveToEnvFile()
+}
+
+// saveToEnvFile 将当前配置中的可变字段写回 .env 文件（调用方须持有 c.mu）
+func (c *Config) saveToEnvFile() error {
+	envMap, err := godotenv.Read(".env")
+	if err != nil {
+		// .env 不存在则新建空 map
+		envMap = make(map[string]string)
+	}
+
+	envMap["TRADE_AMOUNTS"] = strings.Join(c.TradeAmounts, ",")
+
+	return godotenv.Write(envMap, ".env")
 }
