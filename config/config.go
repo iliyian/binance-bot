@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bufio"
 	"fmt"
 	"os"
 	"strconv"
@@ -173,15 +174,49 @@ func (c *Config) UpdateTradeAmount(pair string, amount string) error {
 	return c.saveToEnvFile()
 }
 
-// saveToEnvFile 将当前配置中的可变字段写回 .env 文件（调用方须持有 c.mu）
+// saveToEnvFile 将当前 TRADE_AMOUNTS 写回 .env 文件，保留原有注释和变量顺序（调用方须持有 c.mu）
 func (c *Config) saveToEnvFile() error {
-	envMap, err := godotenv.Read(".env")
-	if err != nil {
-		// .env 不存在则新建空 map
-		envMap = make(map[string]string)
+	const envFile = ".env"
+	newValue := strings.Join(c.TradeAmounts, ",")
+	key := "TRADE_AMOUNTS"
+
+	// 读取原始文件内容
+	data, err := os.ReadFile(envFile)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("读取 .env 失败: %w", err)
 	}
 
-	envMap["TRADE_AMOUNTS"] = strings.Join(c.TradeAmounts, ",")
+	var lines []string
+	found := false
 
-	return godotenv.Write(envMap, ".env")
+	if len(data) > 0 {
+		scanner := bufio.NewScanner(strings.NewReader(string(data)))
+		for scanner.Scan() {
+			line := scanner.Text()
+			// 匹配 KEY=... 行（跳过注释行和空行）
+			trimmed := strings.TrimSpace(line)
+			if !strings.HasPrefix(trimmed, "#") && strings.HasPrefix(trimmed, key+"=") {
+				lines = append(lines, key+"="+newValue)
+				found = true
+			} else {
+				lines = append(lines, line)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return fmt.Errorf("解析 .env 失败: %w", err)
+		}
+	}
+
+	// 若文件中原本没有该键，追加到末尾
+	if !found {
+		lines = append(lines, key+"="+newValue)
+	}
+
+	content := strings.Join(lines, "\n")
+	// 保留文件末尾换行符（如果原文件有）
+	if len(data) > 0 && data[len(data)-1] == '\n' {
+		content += "\n"
+	}
+
+	return os.WriteFile(envFile, []byte(content), 0644)
 }
