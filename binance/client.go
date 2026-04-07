@@ -27,7 +27,7 @@ type TradeResult struct {
 	Commission      string // 总手续费
 	CommissionAsset string // 手续费资产类型
 	Status          string
-	ExecutedAt      time.Time
+	TransactTime      time.Time
 	Error           error
 }
 
@@ -105,7 +105,7 @@ func (c *Client) SyncServerTime() error {
 func (c *Client) ExecuteMarketBuy(ctx context.Context, symbol, quoteAmount string) *TradeResult {
 	result := &TradeResult{
 		Symbol:     symbol,
-		ExecutedAt: time.Now(),
+		TransactTime: time.Now(),
 	}
 
 	// 使用 quoteOrderQty 按金额市价买入
@@ -124,7 +124,7 @@ func (c *Client) ExecuteMarketBuy(ctx context.Context, symbol, quoteAmount strin
 
 	// 使用币安返回的实际成交时间（毫秒级时间戳）
 	if order.TransactTime > 0 {
-		result.ExecutedAt = time.UnixMilli(order.TransactTime)
+		result.TransactTime = time.UnixMilli(order.TransactTime)
 	}
 
 	result.OrderID = order.OrderID
