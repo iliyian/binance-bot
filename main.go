@@ -18,6 +18,12 @@ import (
 // commitHash 由构建时通过 -ldflags "-X main.commitHash=xxx" 注入
 var commitHash = "dev"
 
+func init() {
+	if len(commitHash) > 7 {
+		commitHash = commitHash[:7]
+	}
+}
+
 func main() {
 	// 命令行参数
 	runOnce := flag.Bool("once", false, "立即执行一次定投（不启动定时任务）")
