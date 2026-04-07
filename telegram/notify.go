@@ -107,6 +107,7 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 			if r.Commission != "" {
 				sb.WriteString(fmt.Sprintf("   💸 手续费: %s\n", r.Commission))
 			}
+			sb.WriteString(fmt.Sprintf("   🕐 成交时间: %s\n", r.ExecutedAt.Format("2006-01-02 15:04:05")))
 			sb.WriteString(fmt.Sprintf("   🔖 订单ID: %d\n", r.OrderID))
 		}
 		// 显示 pool 信息

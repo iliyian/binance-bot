@@ -122,6 +122,11 @@ func (c *Client) ExecuteMarketBuy(ctx context.Context, symbol, quoteAmount strin
 		return result
 	}
 
+	// 使用币安返回的实际成交时间（毫秒级时间戳）
+	if order.TransactTime > 0 {
+		result.ExecutedAt = time.UnixMilli(order.TransactTime)
+	}
+
 	result.OrderID = order.OrderID
 	result.Status = string(order.Status)
 	result.FilledQty = order.ExecutedQuantity
