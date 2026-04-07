@@ -15,6 +15,9 @@ import (
 	"github.com/iliyian/binance-bot/telegram"
 )
 
+// commitHash 由构建时通过 -ldflags "-X main.commitHash=xxx" 注入
+var commitHash = "dev"
+
 func main() {
 	// 命令行参数
 	runOnce := flag.Bool("once", false, "立即执行一次定投（不启动定时任务）")
@@ -23,7 +26,7 @@ func main() {
 	// 初始化日志
 	setupLog()
 
-	log.Println("🚀 币安自动定投机器人启动中...")
+	log.Printf("🚀 币安自动定投机器人启动中... (commit: %s)", commitHash)
 
 	// 加载配置
 	cfg, err := config.Load()
@@ -68,7 +71,7 @@ func main() {
 	var notifier *telegram.Notifier
 	var bot *telegram.Bot
 	if cfg.HasTelegram() {
-		notifier = telegram.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID)
+		notifier = telegram.NewNotifier(cfg.TelegramBotToken, cfg.TelegramChatID, commitHash)
 		bot = telegram.NewBot(cfg.TelegramBotToken, cfg.TelegramChatID, client)
 		log.Println("📨 Telegram 通知已启用")
 	} else {

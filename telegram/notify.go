@@ -25,16 +25,18 @@ type PoolInfo struct {
 
 // Notifier Telegram 通知器
 type Notifier struct {
-	botToken string
-	chatID   string
-	client   *http.Client
+	botToken   string
+	chatID     string
+	commitHash string
+	client     *http.Client
 }
 
 // NewNotifier 创建 Telegram 通知器
-func NewNotifier(botToken, chatID string) *Notifier {
+func NewNotifier(botToken, chatID, commitHash string) *Notifier {
 	return &Notifier{
-		botToken: botToken,
-		chatID:   chatID,
+		botToken:   botToken,
+		chatID:     chatID,
+		commitHash: commitHash,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -160,6 +162,8 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 		}
 	}
 
+	sb.WriteString(fmt.Sprintf("\n🔗 <code>%s</code>", n.commitHash))
+
 	msg := sb.String()
 
 	if err := n.sendMessage(msg); err != nil {
@@ -207,6 +211,7 @@ func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr 
 
 	sb.WriteString(fmt.Sprintf("\n⏰ 定时规则: <code>%s</code>\n", cronExpr))
 	sb.WriteString(fmt.Sprintf("📅 启动时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
+	sb.WriteString(fmt.Sprintf("🔗 版本: <code>%s</code>", n.commitHash))
 
 	if err := n.sendMessage(sb.String()); err != nil {
 		log.Printf("❌ 发送启动通知失败: %v", err)
@@ -215,8 +220,8 @@ func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr 
 
 // SendErrorNotice 发送错误通知
 func (n *Notifier) SendErrorNotice(errMsg string) {
-	msg := fmt.Sprintf("🚨 <b>币安定投异常</b>\n\n⚠️ %s\n\n📅 %s",
-		html.EscapeString(errMsg), time.Now().Format("2006-01-02 15:04:05"))
+	msg := fmt.Sprintf("🚨 <b>币安定投异常</b>\n\n⚠️ %s\n\n📅 %s\n🔗 <code>%s</code>",
+		html.EscapeString(errMsg), time.Now().Format("2006-01-02 15:04:05"), n.commitHash)
 
 	if err := n.sendMessage(msg); err != nil {
 		log.Printf("❌ 发送错误通知失败: %v", err)

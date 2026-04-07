@@ -3,6 +3,7 @@ FROM --platform=$BUILDPLATFORM golang:1.21-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
+ARG COMMIT_HASH=dev
 
 RUN apk add --no-cache git ca-certificates tzdata
 
@@ -14,7 +15,7 @@ RUN go mod download
 
 # 复制源码并构建
 COPY . .
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o binance-bot .
+RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w -X main.commitHash=${COMMIT_HASH}" -o binance-bot .
 
 # ===== 运行阶段 =====
 FROM alpine:3.19
