@@ -18,14 +18,18 @@ import (
 // PoolGetter 获取当前 pool 状态的回调函数类型
 type PoolGetter func() map[string]float64
 
+// AmountUpdater 更新定投金额的回调函数类型
+type AmountUpdater func(pair string, amount string) error
+
 // Bot Telegram Bot 命令处理器
 type Bot struct {
-	botToken   string
-	chatID     string
-	client     *http.Client
-	binance    *binance.Client
-	cancel     context.CancelFunc
-	poolGetter PoolGetter
+	botToken      string
+	chatID        string
+	client        *http.Client
+	binance       *binance.Client
+	cancel        context.CancelFunc
+	poolGetter    PoolGetter
+	amountUpdater AmountUpdater
 }
 
 // TelegramUpdate Telegram 更新结构
@@ -92,6 +96,11 @@ func (b *Bot) SetPoolGetter(getter PoolGetter) {
 	b.poolGetter = getter
 }
 
+// SetAmountUpdater 设置定投金额更新回调
+func (b *Bot) SetAmountUpdater(updater AmountUpdater) {
+	b.amountUpdater = updater
+}
+
 // Start 启动 Bot 长轮询
 func (b *Bot) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,6 +134,7 @@ func (b *Bot) registerCommands() error {
 		{Command: "earn", Description: "查询活期理财持仓"},
 		{Command: "asset", Description: "查询指定币种余额，用法: /asset BTC"},
 		{Command: "pool", Description: "查询各交易对的 Pool 累积金额"},
+		{Command: "setamount", Description: "修改定投金额，用法: /setamount BTCUSDT 20"},
 		{Command: "help", Description: "显示帮助信息"},
 	}
 
@@ -247,6 +257,8 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		b.handleAsset(args)
 	case "/pool":
 		b.handlePool()
+	case "/setamount":
+		b.handleSetAmount(args)
 	case "/help", "/start":
 		b.handleHelp()
 	default:
@@ -496,6 +508,29 @@ func (b *Bot) handlePool() {
 	b.sendReply(sb.String())
 }
 
+// handleSetAmount 处理 /setamount 命令 — 修改指定交易对的定投金额
+func (b *Bot) handleSetAmount(args []string) {
+	if len(args) < 2 {
+		b.sendReply("⚠️ 用法: <code>/setamount &lt;交易对&gt; &lt;金额&gt;</code>\n例: <code>/setamount BTCUSDT 20</code>")
+		return
+	}
+
+	pair := strings.ToUpper(strings.TrimSpace(args[0]))
+	amount := strings.TrimSpace(args[1])
+
+	if b.amountUpdater == nil {
+		b.sendReply("❌ 该功能当前不可用，请联系管理员")
+		return
+	}
+
+	if err := b.amountUpdater(pair, amount); err != nil {
+		b.sendReply(fmt.Sprintf("❌ 更新失败: %s", html.EscapeString(err.Error())))
+		return
+	}
+
+	b.sendReply(fmt.Sprintf("✅ <b>%s</b> 定投金额已更新为 <b>%s USDT</b>，已保存到配置文件", html.EscapeString(pair), html.EscapeString(amount)))
+}
+
 // handleHelp 处理 /help 命令
 func (b *Bot) handleHelp() {
 	text := `🤖 <b>币安定投机器人 — 命令列表</b>
@@ -507,6 +542,9 @@ func (b *Bot) handleHelp() {
   例: <code>/asset BTC</code>
   例: <code>/asset USDT</code>
 /pool — 查询各交易对的 Pool 累积金额
+/setamount &lt;交易对&gt; &lt;金额&gt; — 修改定投金额（立即生效并保存）
+  例: <code>/setamount BTCUSDT 20</code>
+  例: <code>/setamount ETHUSDT 10</code>
 /help — 显示此帮助信息`
 
 	b.sendReply(text)
