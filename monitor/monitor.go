@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/iliyian/binance-bot/config"
@@ -21,11 +22,12 @@ type IntervalResult struct {
 
 // Monitor 价格监控服务
 type Monitor struct {
-	cfg      *config.Config
-	notifier *telegram.Notifier
-	client   *http.Client
-	stop     chan struct{}
-	done     chan struct{}
+	cfg          *config.Config
+	notifier     *telegram.Notifier
+	client       *http.Client
+	stop         chan struct{}
+	done         chan struct{}
+	prevAllBreak sync.Map // map[string]bool 上次检查各交易对是否全级别突破
 }
 
 // New 创建监控服务
@@ -157,6 +159,12 @@ func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResul
 
 	if allBreak {
 		log.Printf("🔔 %s 所有 K 线级别布林带突破！方向: %s", symbol, breakTypeName(breakDir))
+	}
+
+	prev, _ := m.prevAllBreak.Swap(symbol, allBreak)
+	wasBreak, _ := prev.(bool)
+
+	if allBreak && !wasBreak {
 		m.sendAlert(symbol, breakDir, results)
 	}
 
