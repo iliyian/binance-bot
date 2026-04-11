@@ -8,6 +8,8 @@ type BollResult struct {
 	Middle float64 // 中轨 (SMA)
 	Lower  float64 // 下轨
 	Close  float64 // 最新收盘价
+	High   float64 // 最新最高价
+	Low    float64 // 最新最低价
 }
 
 // BreakType 突破类型
@@ -19,12 +21,12 @@ const (
 	BreakLower                  // 突破下轨
 )
 
-// Break 判断收盘价是否突破布林带
+// Break 判断最高价/最低价是否突破布林带
 func (b *BollResult) Break() BreakType {
-	if b.Close > b.Upper {
+	if b.High > b.Upper {
 		return BreakUpper
 	}
-	if b.Close < b.Lower {
+	if b.Low < b.Lower {
 		return BreakLower
 	}
 	return BreakNone

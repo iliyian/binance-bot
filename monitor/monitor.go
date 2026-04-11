@@ -101,10 +101,9 @@ func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals [
 			continue
 		}
 
-		// 去掉最后一根未闭合的K线
-		if len(klines) > 1 {
-			klines = klines[:len(klines)-1]
-		}
+		// 最后一根未闭合K线的最高/最低价用于突破判断
+		lastKline := klines[len(klines)-1]
+		klines = klines[:len(klines)-1]
 
 		closes := GetCloses(klines)
 		boll := CalcBoll(closes, m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev)
@@ -113,6 +112,8 @@ func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals [
 			allBreak = false
 			continue
 		}
+		boll.High = lastKline.High
+		boll.Low = lastKline.Low
 
 		bt := boll.Break()
 		results = append(results, IntervalResult{
@@ -150,8 +151,8 @@ func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResul
 	results, allBreak, breakDir := m.checkIntervals(ctx, symbol, intervals)
 
 	for _, r := range results {
-		log.Printf("📊 %s [%s] 上轨=%.4f 均值=%.4f 下轨=%.4f 收盘=%.4f",
-			symbol, r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower, r.Boll.Close)
+		log.Printf("📊 %s [%s] 上轨=%.4f 均值=%.4f 下轨=%.4f 最高=%.4f 最低=%.4f",
+			symbol, r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower, r.Boll.High, r.Boll.Low)
 	}
 
 	if allBreak {
@@ -176,7 +177,7 @@ func (m *Monitor) CheckNow() string {
 				status = "⬇️ 突破下轨"
 			}
 			sb.WriteString(fmt.Sprintf("  [%s] 上轨=%.2f 均值=%.2f 下轨=%.2f\n", r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower))
-			sb.WriteString(fmt.Sprintf("  收盘=%.2f %s\n", r.Boll.Close, status))
+			sb.WriteString(fmt.Sprintf("  最高=%.2f 最低=%.2f %s\n", r.Boll.High, r.Boll.Low, status))
 		}
 		sb.WriteString("\n")
 	}
@@ -193,7 +194,8 @@ func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []Interva
 	for i, r := range results {
 		details[i] = telegram.BollAlertDetail{
 			Interval: r.Interval,
-			Close:    r.Boll.Close,
+			High:     r.Boll.High,
+			Low:      r.Boll.Low,
 			Upper:    r.Boll.Upper,
 			Middle:   r.Boll.Middle,
 			Lower:    r.Boll.Lower,

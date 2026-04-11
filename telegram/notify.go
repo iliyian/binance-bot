@@ -26,7 +26,8 @@ type PoolInfo struct {
 // BollAlertDetail 布林带提醒中单个 K 线级别的详情
 type BollAlertDetail struct {
 	Interval string
-	Close    float64
+	High     float64
+	Low      float64
 	Upper    float64
 	Middle   float64
 	Lower    float64
@@ -252,7 +253,8 @@ func (n *Notifier) SendBollAlert(symbol, direction string, isUpper bool, details
 
 	for _, d := range details {
 		sb.WriteString(fmt.Sprintf("⏱ <b>%s</b>\n", d.Interval))
-		sb.WriteString(fmt.Sprintf("   收盘价: <code>%.2f</code>\n", d.Close))
+		sb.WriteString(fmt.Sprintf("   最高价: <code>%.2f</code>\n", d.High))
+		sb.WriteString(fmt.Sprintf("   最低价: <code>%.2f</code>\n", d.Low))
 		sb.WriteString(fmt.Sprintf("   上轨:   <code>%.2f</code>\n", d.Upper))
 		sb.WriteString(fmt.Sprintf("   中轨:   <code>%.2f</code>\n", d.Middle))
 		sb.WriteString(fmt.Sprintf("   下轨:   <code>%.2f</code>\n\n", d.Lower))
