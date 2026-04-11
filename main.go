@@ -97,6 +97,7 @@ func main() {
 		mon = monitor.New(cfg, notifier)
 		if bot != nil {
 			bot.SetMonitorStatusGetter(mon.GetStatus)
+			bot.SetMonitorCheckNow(mon.CheckNow)
 		}
 		log.Println("📡 价格监控已配置")
 	}

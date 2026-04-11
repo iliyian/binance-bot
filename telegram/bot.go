@@ -21,6 +21,9 @@ type PoolGetter func() map[string]float64
 // MonitorStatusGetter 获取监控状态的回调函数类型
 type MonitorStatusGetter func() string
 
+// MonitorCheckNow 立即执行监控检查并返回结果的回调函数类型
+type MonitorCheckNow func() string
+
 // Bot Telegram Bot 命令处理器
 type Bot struct {
 	botToken      string
@@ -30,6 +33,7 @@ type Bot struct {
 	cancel        context.CancelFunc
 	poolGetter    PoolGetter
 	monitorGetter MonitorStatusGetter
+	monitorCheck  MonitorCheckNow
 }
 
 // TelegramUpdate Telegram 更新结构
@@ -99,6 +103,11 @@ func (b *Bot) SetPoolGetter(getter PoolGetter) {
 // SetMonitorStatusGetter 设置监控状态获取回调
 func (b *Bot) SetMonitorStatusGetter(getter MonitorStatusGetter) {
 	b.monitorGetter = getter
+}
+
+// SetMonitorCheckNow 设置立即执行监控检查的回调
+func (b *Bot) SetMonitorCheckNow(checker MonitorCheckNow) {
+	b.monitorCheck = checker
 }
 
 // Start 启动 Bot 长轮询
@@ -538,10 +547,13 @@ func (b *Bot) handleMonitor() {
 	}
 
 	status := b.monitorGetter()
-	if status == "" {
-		sb.WriteString("⚠️ 价格监控未启用\n")
-	} else {
+	if status != "" {
 		sb.WriteString(status)
+		sb.WriteString("\n")
+	}
+
+	if b.monitorCheck != nil {
+		sb.WriteString(b.monitorCheck())
 	}
 
 	b.sendReply(sb.String())

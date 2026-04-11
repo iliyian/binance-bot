@@ -70,6 +70,8 @@ func (m *Monitor) GetStatus() string {
 func (m *Monitor) run() {
 	defer close(m.done)
 
+	m.checkAll()
+
 	ticker := time.NewTicker(m.cfg.BollMonitorCheckInterval)
 	defer ticker.Stop()
 
@@ -85,7 +87,7 @@ func (m *Monitor) run() {
 
 // checkIntervals 检查一个交易对所有 interval 的布林带状态
 func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals []string) ([]IntervalResult, bool, BreakType) {
-	limit := m.cfg.BollMonitorPeriod + 1
+	limit := m.cfg.BollMonitorPeriod + 1 // +1 排除当前未闭合K线
 
 	results := make([]IntervalResult, 0, len(intervals))
 	allBreak := true
@@ -97,6 +99,11 @@ func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals [
 			log.Printf("⚠️ 获取 %s %s K 线失败: %v", symbol, interval, err)
 			allBreak = false
 			continue
+		}
+
+		// 去掉最后一根未闭合的K线
+		if len(klines) > 1 {
+			klines = klines[:len(klines)-1]
 		}
 
 		closes := GetCloses(klines)
@@ -136,16 +143,44 @@ func (m *Monitor) checkAll() {
 	}
 }
 
-func (m *Monitor) checkSymbol(symbol string, intervals []string) {
+func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResult {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	results, allBreak, breakDir := m.checkIntervals(ctx, symbol, intervals)
 
+	for _, r := range results {
+		log.Printf("📊 %s [%s] 上轨=%.4f 均值=%.4f 下轨=%.4f 收盘=%.4f",
+			symbol, r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower, r.Boll.Close)
+	}
+
 	if allBreak {
 		log.Printf("🔔 %s 所有 K 线级别布林带突破！方向: %s", symbol, breakTypeName(breakDir))
 		m.sendAlert(symbol, breakDir, results)
 	}
+
+	return results
+}
+
+// CheckNow 立即执行一次检查并返回格式化结果
+func (m *Monitor) CheckNow() string {
+	var sb strings.Builder
+	for _, sym := range m.cfg.BollMonitorSymbols {
+		results := m.checkSymbol(sym.Symbol, sym.Intervals)
+		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", sym.Symbol))
+		for _, r := range results {
+			status := "—"
+			if r.BreakType == BreakUpper {
+				status = "⬆️ 突破上轨"
+			} else if r.BreakType == BreakLower {
+				status = "⬇️ 突破下轨"
+			}
+			sb.WriteString(fmt.Sprintf("  [%s] 上轨=%.2f 均值=%.2f 下轨=%.2f\n", r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower))
+			sb.WriteString(fmt.Sprintf("  收盘=%.2f %s\n", r.Boll.Close, status))
+		}
+		sb.WriteString("\n")
+	}
+	return sb.String()
 }
 
 func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []IntervalResult) {
