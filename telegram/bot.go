@@ -18,14 +18,18 @@ import (
 // PoolGetter 获取当前 pool 状态的回调函数类型
 type PoolGetter func() map[string]float64
 
+// MonitorStatusGetter 获取监控状态的回调函数类型
+type MonitorStatusGetter func() string
+
 // Bot Telegram Bot 命令处理器
 type Bot struct {
-	botToken   string
-	chatID     string
-	client     *http.Client
-	binance    *binance.Client
-	cancel     context.CancelFunc
-	poolGetter PoolGetter
+	botToken      string
+	chatID        string
+	client        *http.Client
+	binance       *binance.Client
+	cancel        context.CancelFunc
+	poolGetter    PoolGetter
+	monitorGetter MonitorStatusGetter
 }
 
 // TelegramUpdate Telegram 更新结构
@@ -92,6 +96,11 @@ func (b *Bot) SetPoolGetter(getter PoolGetter) {
 	b.poolGetter = getter
 }
 
+// SetMonitorStatusGetter 设置监控状态获取回调
+func (b *Bot) SetMonitorStatusGetter(getter MonitorStatusGetter) {
+	b.monitorGetter = getter
+}
+
 // Start 启动 Bot 长轮询
 func (b *Bot) Start() {
 	ctx, cancel := context.WithCancel(context.Background())
@@ -125,6 +134,7 @@ func (b *Bot) registerCommands() error {
 		{Command: "earn", Description: "查询活期理财持仓"},
 		{Command: "asset", Description: "查询指定币种余额，用法: /asset BTC"},
 		{Command: "pool", Description: "查询各交易对的 Pool 累积金额"},
+		{Command: "monitor", Description: "查询价格监控状态"},
 		{Command: "help", Description: "显示帮助信息"},
 	}
 
@@ -247,6 +257,8 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		b.handleAsset(args)
 	case "/pool":
 		b.handlePool()
+	case "/monitor":
+		b.handleMonitor()
 	case "/help", "/start":
 		b.handleHelp()
 	default:
@@ -507,9 +519,32 @@ func (b *Bot) handleHelp() {
   例: <code>/asset BTC</code>
   例: <code>/asset USDT</code>
 /pool — 查询各交易对的 Pool 累积金额
+/monitor — 查询价格监控状态
 /help — 显示此帮助信息`
 
 	b.sendReply(text)
+}
+
+// handleMonitor 处理 /monitor 命令
+func (b *Bot) handleMonitor() {
+	var sb strings.Builder
+	sb.WriteString("📡 <b>价格监控状态</b>\n")
+	sb.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	if b.monitorGetter == nil {
+		sb.WriteString("⚠️ 价格监控未启用\n")
+		b.sendReply(sb.String())
+		return
+	}
+
+	status := b.monitorGetter()
+	if status == "" {
+		sb.WriteString("⚠️ 价格监控未启用\n")
+	} else {
+		sb.WriteString(status)
+	}
+
+	b.sendReply(sb.String())
 }
 
 // boolToEmoji 布尔值转 emoji

@@ -33,6 +33,19 @@ type Config struct {
 	BinanceBaseURL string // 自定义 API 地址，最高优先级
 	AutoEarn       bool   // 自动与活期理财互转
 	LogLevel       string
+
+	// 布林带价格监控
+	BollMonitorEnabled       bool
+	BollMonitorSymbols       []BollMonitorSymbolConfig // 监控的交易对及其 K 线级别
+	BollMonitorPeriod        int                       // 布林带周期，默认 20
+	BollMonitorStdDev        float64                   // 布林带标准差倍数，默认 2.0
+	BollMonitorCheckInterval time.Duration             // 检查间隔，默认 1m
+}
+
+// BollMonitorSymbolConfig 单个监控交易对配置
+type BollMonitorSymbolConfig struct {
+	Symbol    string   // 交易对，如 BTCUSDT
+	Intervals []string // K 线级别列表，必须全部突破才触发，如 ["1h", "4h"]
 }
 
 // Load 从 .env 文件加载配置
@@ -130,6 +143,70 @@ func Load() (*Config, error) {
 	// 配置冲突检查
 	if cfg.AutoEarn && (cfg.UseDemo || cfg.UseTestnet) {
 		return nil, fmt.Errorf("AUTO_EARN 不能与 USE_DEMO 或 USE_TESTNET 同时启用（模拟/测试环境不支持理财 API）")
+	}
+
+	// 布林带价格监控配置
+	cfg.BollMonitorEnabled = strings.ToLower(os.Getenv("BOLL_MONITOR_ENABLED")) == "true"
+	if cfg.BollMonitorEnabled {
+		// 解析监控交易对，格式: BTCUSDT:1h&4h,ETHUSDT:15m&1h 或 BTCUSDT,ETHUSDT（使用统一 intervals）
+		monSymbols := os.Getenv("BOLL_MONITOR_SYMBOLS")
+		if monSymbols == "" {
+			return nil, fmt.Errorf("BOLL_MONITOR_ENABLED=true 但 BOLL_MONITOR_SYMBOLS 未配置")
+		}
+
+		defaultIntervals := os.Getenv("BOLL_MONITOR_INTERVALS") // 全局默认，如 1h&4h
+
+		for _, part := range strings.Split(monSymbols, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			sc := BollMonitorSymbolConfig{}
+			if idx := strings.Index(part, ":"); idx >= 0 {
+				// 格式: BTCUSDT:1h&4h
+				sc.Symbol = strings.TrimSpace(part[:idx])
+				sc.Intervals = strings.Split(strings.TrimSpace(part[idx+1:]), "&")
+			} else {
+				// 格式: BTCUSDT，使用全局默认 intervals
+				sc.Symbol = part
+				if defaultIntervals == "" {
+					return nil, fmt.Errorf("BOLL_MONITOR_SYMBOLS 中 %s 未指定 K 线级别，且 BOLL_MONITOR_INTERVALS 未配置", part)
+				}
+				sc.Intervals = strings.Split(defaultIntervals, "&")
+			}
+			for i := range sc.Intervals {
+				sc.Intervals[i] = strings.TrimSpace(sc.Intervals[i])
+			}
+			cfg.BollMonitorSymbols = append(cfg.BollMonitorSymbols, sc)
+		}
+
+		// 布林带参数
+		cfg.BollMonitorPeriod = 20
+		if v := os.Getenv("BOLL_MONITOR_PERIOD"); v != "" {
+			p, err := strconv.Atoi(v)
+			if err != nil {
+				return nil, fmt.Errorf("BOLL_MONITOR_PERIOD 无效: %s", v)
+			}
+			cfg.BollMonitorPeriod = p
+		}
+
+		cfg.BollMonitorStdDev = 2.0
+		if v := os.Getenv("BOLL_MONITOR_STDDEV"); v != "" {
+			f, err := strconv.ParseFloat(v, 64)
+			if err != nil {
+				return nil, fmt.Errorf("BOLL_MONITOR_STDDEV 无效: %s", v)
+			}
+			cfg.BollMonitorStdDev = f
+		}
+
+		cfg.BollMonitorCheckInterval = 1 * time.Minute
+		if v := os.Getenv("BOLL_MONITOR_CHECK_INTERVAL"); v != "" {
+			d, err := time.ParseDuration(v)
+			if err != nil {
+				return nil, fmt.Errorf("BOLL_MONITOR_CHECK_INTERVAL 无效: %s（示例: 30s, 1m, 5m）", v)
+			}
+			cfg.BollMonitorCheckInterval = d
+		}
 	}
 
 	return cfg, nil

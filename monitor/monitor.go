@@ -1,0 +1,179 @@
+package monitor
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"net/http"
+	"strings"
+	"time"
+
+	"github.com/iliyian/binance-bot/config"
+	"github.com/iliyian/binance-bot/telegram"
+)
+
+// IntervalResult 单个 interval 的检测结果
+type IntervalResult struct {
+	Interval  string
+	Boll      *BollResult
+	BreakType BreakType
+}
+
+// Monitor 价格监控服务
+type Monitor struct {
+	cfg      *config.Config
+	notifier *telegram.Notifier
+	client   *http.Client
+	stop     chan struct{}
+	done     chan struct{}
+}
+
+// New 创建监控服务
+func New(cfg *config.Config, notifier *telegram.Notifier) *Monitor {
+	return &Monitor{
+		cfg:      cfg,
+		notifier: notifier,
+		client:   &http.Client{Timeout: 15 * time.Second},
+		stop:     make(chan struct{}),
+		done:     make(chan struct{}),
+	}
+}
+
+// Start 启动监控
+func (m *Monitor) Start() {
+	go m.run()
+	log.Printf("📡 价格监控已启动，检查间隔: %s", m.cfg.BollMonitorCheckInterval)
+	for _, sym := range m.cfg.BollMonitorSymbols {
+		log.Printf("📡 监控 %s，K 线: %s，布林带(%d, %.1f)",
+			sym.Symbol, strings.Join(sym.Intervals, "&"), m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev)
+	}
+}
+
+// Stop 停止监控
+func (m *Monitor) Stop() {
+	close(m.stop)
+	<-m.done
+	log.Println("⏹ 价格监控已停止")
+}
+
+// GetStatus 获取当前监控状态描述
+func (m *Monitor) GetStatus() string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("检查间隔: %s\n", m.cfg.BollMonitorCheckInterval))
+	sb.WriteString(fmt.Sprintf("布林带参数: period=%d, stddev=%.1f\n\n", m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev))
+	for _, sym := range m.cfg.BollMonitorSymbols {
+		sb.WriteString(fmt.Sprintf("• %s — %s\n", sym.Symbol, strings.Join(sym.Intervals, "&")))
+	}
+	return sb.String()
+}
+
+func (m *Monitor) run() {
+	defer close(m.done)
+
+	ticker := time.NewTicker(m.cfg.BollMonitorCheckInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.stop:
+			return
+		case <-ticker.C:
+			m.checkAll()
+		}
+	}
+}
+
+// checkIntervals 检查一个交易对所有 interval 的布林带状态
+func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals []string) ([]IntervalResult, bool, BreakType) {
+	limit := m.cfg.BollMonitorPeriod + 1
+
+	results := make([]IntervalResult, 0, len(intervals))
+	allBreak := true
+	var breakDir BreakType
+
+	for _, interval := range intervals {
+		klines, err := FetchKlines(ctx, m.client, symbol, interval, limit)
+		if err != nil {
+			log.Printf("⚠️ 获取 %s %s K 线失败: %v", symbol, interval, err)
+			allBreak = false
+			continue
+		}
+
+		closes := GetCloses(klines)
+		boll := CalcBoll(closes, m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev)
+		if boll == nil {
+			log.Printf("⚠️ %s %s K 线数据不足，无法计算布林带", symbol, interval)
+			allBreak = false
+			continue
+		}
+
+		bt := boll.Break()
+		results = append(results, IntervalResult{
+			Interval:  interval,
+			Boll:      boll,
+			BreakType: bt,
+		})
+
+		if bt == BreakNone {
+			allBreak = false
+		} else if breakDir == BreakNone {
+			breakDir = bt
+		} else if breakDir != bt {
+			allBreak = false
+		}
+	}
+
+	if len(results) < len(intervals) {
+		allBreak = false
+	}
+
+	return results, allBreak, breakDir
+}
+
+func (m *Monitor) checkAll() {
+	for _, sym := range m.cfg.BollMonitorSymbols {
+		m.checkSymbol(sym.Symbol, sym.Intervals)
+	}
+}
+
+func (m *Monitor) checkSymbol(symbol string, intervals []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	results, allBreak, breakDir := m.checkIntervals(ctx, symbol, intervals)
+
+	if allBreak {
+		log.Printf("🔔 %s 所有 K 线级别布林带突破！方向: %s", symbol, breakTypeName(breakDir))
+		m.sendAlert(symbol, breakDir, results)
+	}
+}
+
+func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []IntervalResult) {
+	if m.notifier == nil {
+		return
+	}
+
+	// 构建通知所需的数据（避免循环依赖，传递简单结构）
+	details := make([]telegram.BollAlertDetail, len(results))
+	for i, r := range results {
+		details[i] = telegram.BollAlertDetail{
+			Interval: r.Interval,
+			Close:    r.Boll.Close,
+			Upper:    r.Boll.Upper,
+			Middle:   r.Boll.Middle,
+			Lower:    r.Boll.Lower,
+		}
+	}
+	m.notifier.SendBollAlert(symbol, breakTypeName(breakDir), breakDir == BreakUpper, details)
+}
+
+func breakTypeName(bt BreakType) string {
+	switch bt {
+	case BreakUpper:
+		return "突破上轨"
+	case BreakLower:
+		return "突破下轨"
+	default:
+		return "未突破"
+	}
+}

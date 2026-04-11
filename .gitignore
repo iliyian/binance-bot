@@ -18,3 +18,5 @@ Thumbs.db
 # 日志
 logs/
 *.log
+
+.claude

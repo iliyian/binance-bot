@@ -11,6 +11,7 @@ import (
 
 	"github.com/iliyian/binance-bot/binance"
 	"github.com/iliyian/binance-bot/config"
+	"github.com/iliyian/binance-bot/monitor"
 	"github.com/iliyian/binance-bot/scheduler"
 	"github.com/iliyian/binance-bot/telegram"
 )
@@ -92,6 +93,16 @@ func main() {
 		bot.SetPoolGetter(sched.GetPool)
 	}
 
+	// 创建价格监控
+	var mon *monitor.Monitor
+	if cfg.BollMonitorEnabled {
+		mon = monitor.New(cfg, notifier)
+		if bot != nil {
+			bot.SetMonitorStatusGetter(mon.GetStatus)
+		}
+		log.Println("📡 价格监控已配置")
+	}
+
 	// 如果是单次执行模式
 	if *runOnce {
 		log.Println("🔔 单次执行模式")
@@ -110,6 +121,11 @@ func main() {
 		log.Fatalf("❌ 定时任务启动失败: %v", err)
 	}
 
+	// 启动价格监控
+	if mon != nil {
+		mon.Start()
+	}
+
 	// 发送启动通知
 	if notifier != nil {
 		notifier.SendStartupNotice(cfg.TradePairs, cfg.TradeAmounts, cfg.CronSchedule, cfg.PoolAmounts)
@@ -124,6 +140,9 @@ func main() {
 
 	log.Printf("📛 收到信号 %v，正在关闭...", sig)
 	sched.Stop()
+	if mon != nil {
+		mon.Stop()
+	}
 	if bot != nil {
 		bot.Stop()
 	}

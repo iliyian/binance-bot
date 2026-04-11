@@ -23,6 +23,15 @@ type PoolInfo struct {
 	Actual     float64 // 实际花费金额
 }
 
+// BollAlertDetail 布林带提醒中单个 K 线级别的详情
+type BollAlertDetail struct {
+	Interval string
+	Close    float64
+	Upper    float64
+	Middle   float64
+	Lower    float64
+}
+
 // Notifier Telegram 通知器
 type Notifier struct {
 	botToken   string
@@ -225,5 +234,35 @@ func (n *Notifier) SendErrorNotice(errMsg string) {
 
 	if err := n.sendMessage(msg); err != nil {
 		log.Printf("❌ 发送错误通知失败: %v", err)
+	}
+}
+
+// SendBollAlert 发送布林带突破提醒
+func (n *Notifier) SendBollAlert(symbol, direction string, isUpper bool, details []BollAlertDetail) {
+	var sb strings.Builder
+
+	icon := "📈"
+	if !isUpper {
+		icon = "📉"
+	}
+
+	sb.WriteString("🔔 <b>布林带突破提醒</b>\n\n")
+	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n", symbol))
+	sb.WriteString(fmt.Sprintf("%s %s\n\n", icon, direction))
+
+	for _, d := range details {
+		sb.WriteString(fmt.Sprintf("⏱ <b>%s</b>\n", d.Interval))
+		sb.WriteString(fmt.Sprintf("   收盘价: <code>%.2f</code>\n", d.Close))
+		sb.WriteString(fmt.Sprintf("   上轨:   <code>%.2f</code>\n", d.Upper))
+		sb.WriteString(fmt.Sprintf("   中轨:   <code>%.2f</code>\n", d.Middle))
+		sb.WriteString(fmt.Sprintf("   下轨:   <code>%.2f</code>\n\n", d.Lower))
+	}
+
+	sb.WriteString(fmt.Sprintf("📅 %s", time.Now().Format("2006-01-02 15:04:05")))
+
+	if err := n.sendMessage(sb.String()); err != nil {
+		log.Printf("❌ 发送布林带提醒失败: %v", err)
+	} else {
+		log.Printf("📨 布林带提醒发送成功: %s %s", symbol, direction)
 	}
 }
