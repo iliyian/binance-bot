@@ -116,6 +116,7 @@ func (m *Monitor) checkIntervals(ctx context.Context, symbol string, intervals [
 		}
 		boll.High = lastKline.High
 		boll.Low = lastKline.Low
+		boll.Close = lastKline.Close
 
 		bt := boll.Break()
 		results = append(results, IntervalResult{
@@ -176,7 +177,11 @@ func (m *Monitor) CheckNow() string {
 	var sb strings.Builder
 	for _, sym := range m.cfg.BollMonitorSymbols {
 		results := m.checkSymbol(sym.Symbol, sym.Intervals)
-		sb.WriteString(fmt.Sprintf("<b>%s</b>\n", sym.Symbol))
+		sb.WriteString(fmt.Sprintf("<b>%s</b>", sym.Symbol))
+		if len(results) > 0 {
+			sb.WriteString(fmt.Sprintf("  实时价格: %.2f", results[0].Boll.Close))
+		}
+		sb.WriteString("\n")
 		for _, r := range results {
 			status := "—"
 			if r.BreakType == BreakUpper {
