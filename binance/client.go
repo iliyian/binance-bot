@@ -348,6 +348,26 @@ func (c *Client) GetSymbolPrice(ctx context.Context, symbol string) (float64, er
 	return price, nil
 }
 
+// GetKlines 获取历史 K 线数据
+func (c *Client) GetKlines(ctx context.Context, symbol, interval string, limit int, startTime, endTime int64) ([]*gobinance.Kline, error) {
+	req := c.client.NewKlinesService().Symbol(symbol).Interval(interval)
+	if limit > 0 {
+		req = req.Limit(limit)
+	}
+	if startTime > 0 {
+		req = req.StartTime(startTime)
+	}
+	if endTime > 0 {
+		req = req.EndTime(endTime)
+	}
+
+	klines, err := req.Do(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("获取 %s (%s) K线数据失败: %w", symbol, interval, err)
+	}
+	return klines, nil
+}
+
 // EnableBNBBurn 启用使用 BNB 支付现货交易手续费（可享受手续费折扣）
 func (c *Client) EnableBNBBurn() error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
