@@ -52,11 +52,8 @@ func (c *Client) debugLog(format string, v ...interface{}) {
 }
 
 // NewClient 创建币安客户端
-// 优先级: baseURL > useDemo > useTestnet > 生产环境
-func NewClient(apiKey, secretKey string, useDemo, useTestnet bool, baseURL string) *Client {
-	if useTestnet {
-		gobinance.UseTestnet = true
-	}
+// 优先级: baseURL > useDemo > 生产环境
+func NewClient(apiKey, secretKey string, useDemo bool, baseURL string) *Client {
 	client := gobinance.NewClient(apiKey, secretKey)
 
 	// 自定义 Base URL 优先级最高

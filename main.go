@@ -52,9 +52,6 @@ func main() {
 	if cfg.UseDemo {
 		log.Println("🧪 使用模拟交易模式 (demo.binance.com)")
 	}
-	if cfg.UseTestnet {
-		log.Println("⚠️ 使用测试网模式 (testnet.binance.vision)")
-	}
 
 	// 打印代理信息
 	if proxy := os.Getenv("HTTPS_PROXY"); proxy != "" {
@@ -68,7 +65,8 @@ func main() {
 	}
 
 	// 创建币安客户端
-	client := binance.NewClient(cfg.BinanceAPIKey, cfg.BinanceSecretKey, cfg.UseDemo, cfg.UseTestnet, cfg.BinanceBaseURL)
+	apiKey, secretKey := cfg.EffectiveAPIKeys()
+	client := binance.NewClient(apiKey, secretKey, cfg.UseDemo, cfg.BinanceBaseURL)
 	if cfg.LogLevel == "debug" {
 		client.SetDebug(true)
 		log.Println("🐛 调试模式已启用")

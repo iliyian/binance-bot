@@ -108,7 +108,6 @@ go build -o binance-bot .
 | `TIMEZONE` | ❌ | 时区 | `Asia/Shanghai` |
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:ABC...` |
 | `TELEGRAM_CHAT_ID` | ❌ | Telegram Chat ID | `-100123456` |
-| `USE_TESTNET` | ❌ | 使用测试网 | `true` / `false` |
 | `LOG_LEVEL` | ❌ | 日志级别 | `info` |
 
 ### Cron 表达式示例
@@ -193,7 +192,7 @@ sudo journalctl -u binance-bot -f    # 查看日志
 2. **IP 白名单**：建议在币安 API 管理中设置服务器 IP 白名单
 3. **最小金额**：币安市价单最小金额通常为 **5 USDT**，部分交易对可能更高
 4. **资金安全**：确保 `.env` 文件权限为 `600`，不要提交到 Git 仓库
-5. **测试验证**：首次使用建议先开启 `USE_TESTNET=true` 进行测试
+5. **测试验证**：首次使用建议先开启 `USE_DEMO=true` 进行模拟交易测试
 6. **Pool 恢复**：重启服务后，记得从最近一次 Telegram 通知中获取 Pool 值并设置 `POOL_AMOUNTS`
 
 ## 📄 License
