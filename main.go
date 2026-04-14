@@ -86,9 +86,13 @@ func main() {
 	// 创建调度器
 	sched := scheduler.New(cfg, client, notifier)
 
-	// 将 pool 查询回调连接到 Telegram Bot
+	// 将 pool 查询/设置回调连接到 Telegram Bot
 	if bot != nil {
 		bot.SetPoolGetter(sched.GetPool)
+		bot.SetPoolSetter(sched.SetPool)
+		bot.SetEnvUpdater(func() error {
+			return config.UpdateEnvKey("POOL_AMOUNTS", sched.GetPoolAmountsString())
+		})
 	}
 
 	// 创建价格监控
@@ -139,6 +143,13 @@ func main() {
 
 	log.Printf("📛 收到信号 %v，正在关闭...", sig)
 	sched.Stop()
+	// 退出时将 pool 状态写入 .env，下次启动可自动恢复
+	poolStr := sched.GetPoolAmountsString()
+	if err := config.UpdateEnvKey("POOL_AMOUNTS", poolStr); err != nil {
+		log.Printf("⚠️ 退出时更新 .env POOL_AMOUNTS 失败: %v", err)
+	} else {
+		log.Printf("💾 Pool 状态已写入 .env: %s", poolStr)
+	}
 	if mon != nil {
 		mon.Stop()
 	}

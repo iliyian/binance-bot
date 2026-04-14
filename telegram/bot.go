@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -17,6 +18,12 @@ import (
 
 // PoolGetter 获取当前 pool 状态的回调函数类型
 type PoolGetter func() map[string]float64
+
+// PoolSetter 设置指定交易对 pool 值的回调函数类型
+type PoolSetter func(pair string, amount float64) error
+
+// EnvUpdater 将当前 pool 状态同步写入 .env 的回调函数类型
+type EnvUpdater func() error
 
 // MonitorStatusGetter 获取监控状态的回调函数类型
 type MonitorStatusGetter func() string
@@ -32,6 +39,8 @@ type Bot struct {
 	binance       *binance.Client
 	cancel        context.CancelFunc
 	poolGetter    PoolGetter
+	poolSetter    PoolSetter
+	envUpdater    EnvUpdater
 	monitorGetter MonitorStatusGetter
 	monitorCheck  MonitorCheckNow
 }
@@ -100,6 +109,16 @@ func (b *Bot) SetPoolGetter(getter PoolGetter) {
 	b.poolGetter = getter
 }
 
+// SetPoolSetter 设置 pool 数据写入回调
+func (b *Bot) SetPoolSetter(setter PoolSetter) {
+	b.poolSetter = setter
+}
+
+// SetEnvUpdater 设置 .env 同步回调
+func (b *Bot) SetEnvUpdater(updater EnvUpdater) {
+	b.envUpdater = updater
+}
+
 // SetMonitorStatusGetter 设置监控状态获取回调
 func (b *Bot) SetMonitorStatusGetter(getter MonitorStatusGetter) {
 	b.monitorGetter = getter
@@ -143,6 +162,7 @@ func (b *Bot) registerCommands() error {
 		{Command: "earn", Description: "查询活期理财持仓"},
 		{Command: "asset", Description: "查询指定币种余额，用法: /asset BTC"},
 		{Command: "pool", Description: "查询各交易对的 Pool 累积金额"},
+		{Command: "setpool", Description: "设置 Pool 金额，用法: /setpool BTCUSDT 0.5"},
 		{Command: "monitor", Description: "查询价格监控状态"},
 		{Command: "help", Description: "显示帮助信息"},
 	}
@@ -266,6 +286,8 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		b.handleAsset(args)
 	case "/pool":
 		b.handlePool()
+	case "/setpool":
+		b.handleSetPool(args)
 	case "/monitor":
 		b.handleMonitor()
 	case "/help", "/start":
@@ -517,6 +539,56 @@ func (b *Bot) handlePool() {
 	b.sendReply(sb.String())
 }
 
+// handleSetPool 处理 /setpool 命令 — 设置指定交易对的 Pool 金额
+func (b *Bot) handleSetPool(args []string) {
+	if b.poolSetter == nil {
+		b.sendReply("⚠️ Pool 功能未初始化")
+		return
+	}
+
+	if len(args) == 0 || len(args)%2 != 0 {
+		b.sendReply("⚠️ 用法: <code>/setpool &lt;交易对&gt; &lt;金额&gt; [&lt;交易对2&gt; &lt;金额2&gt; ...]</code>\n例: <code>/setpool BTCUSDT 0.5</code>\n例: <code>/setpool BTCUSDT 0.5 ETHUSDT 0.3</code>")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("🏊 <b>Pool 设置结果</b>\n\n")
+
+	allOK := true
+	for i := 0; i < len(args); i += 2 {
+		pair := strings.ToUpper(strings.TrimSpace(args[i]))
+		amountStr := strings.TrimSpace(args[i+1])
+
+		amount, err := strconv.ParseFloat(amountStr, 64)
+		if err != nil {
+			sb.WriteString(fmt.Sprintf("❌ <b>%s</b>: 金额格式无效 (%s)\n", html.EscapeString(pair), html.EscapeString(amountStr)))
+			allOK = false
+			continue
+		}
+		if amount < 0 {
+			sb.WriteString(fmt.Sprintf("❌ <b>%s</b>: 金额不能为负数\n", html.EscapeString(pair)))
+			allOK = false
+			continue
+		}
+		if err := b.poolSetter(pair, amount); err != nil {
+			sb.WriteString(fmt.Sprintf("❌ <b>%s</b>: %s\n", html.EscapeString(pair), html.EscapeString(err.Error())))
+			allOK = false
+		} else {
+			sb.WriteString(fmt.Sprintf("✅ <b>%s</b>: %.8f USDT\n", pair, amount))
+		}
+	}
+
+	if b.envUpdater != nil {
+		if err := b.envUpdater(); err != nil {
+			sb.WriteString(fmt.Sprintf("\n⚠️ .env 文件更新失败: %s", html.EscapeString(err.Error())))
+		} else if allOK {
+			sb.WriteString("\n💾 已同步更新 .env 文件")
+		}
+	}
+
+	b.sendReply(sb.String())
+}
+
 // handleHelp 处理 /help 命令
 func (b *Bot) handleHelp() {
 	text := `🤖 <b>币安定投机器人 — 命令列表</b>
@@ -528,6 +600,9 @@ func (b *Bot) handleHelp() {
   例: <code>/asset BTC</code>
   例: <code>/asset USDT</code>
 /pool — 查询各交易对的 Pool 累积金额
+/setpool &lt;交易对&gt; &lt;金额&gt; — 设置 Pool 金额并同步 .env
+  例: <code>/setpool BTCUSDT 0.5</code>
+  例: <code>/setpool BTCUSDT 0.5 ETHUSDT 0.3</code>
 /monitor — 查询价格监控状态
 /help — 显示此帮助信息`
 

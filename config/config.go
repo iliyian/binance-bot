@@ -228,6 +228,50 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
+// UpdateEnvKey 更新 .env 文件中指定 key 的值，若 key 不存在则追加
+func UpdateEnvKey(key, value string) error {
+	const envFile = ".env"
+
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return os.WriteFile(envFile, []byte(key+"="+value+"\n"), 0644)
+		}
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	found := false
+
+	// 优先替换未注释的 key
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, key+"=") {
+			lines[i] = key + "=" + value
+			found = true
+			break
+		}
+	}
+
+	// 其次替换注释掉的 key（取消注释并更新）
+	if !found {
+		for i, line := range lines {
+			trimmed := strings.TrimSpace(line)
+			if strings.HasPrefix(trimmed, "#"+key+"=") || trimmed == "#"+key {
+				lines[i] = key + "=" + value
+				found = true
+				break
+			}
+		}
+	}
+
+	if !found {
+		lines = append(lines, key+"="+value)
+	}
+
+	return os.WriteFile(envFile, []byte(strings.Join(lines, "\n")), 0644)
+}
+
 // HasTelegram 检查是否配置了 Telegram 通知
 func (c *Config) HasTelegram() bool {
 	return c.TelegramBotToken != "" && c.TelegramChatID != ""

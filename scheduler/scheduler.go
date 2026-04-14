@@ -49,6 +49,40 @@ func New(cfg *config.Config, client *binance.Client, notifier *telegram.Notifier
 	return s
 }
 
+// SetPool 设置指定交易对的 pool 值（线程安全）
+func (s *Scheduler) SetPool(pair string, amount float64) error {
+	s.poolMu.Lock()
+	defer s.poolMu.Unlock()
+
+	found := false
+	for _, p := range s.cfg.TradePairs {
+		if strings.TrimSpace(p) == pair {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return fmt.Errorf("交易对 %s 不在配置列表中", pair)
+	}
+
+	s.pool[pair] = amount
+	log.Printf("🏊 手动设置 %s Pool: %.8f USDT", pair, amount)
+	return nil
+}
+
+// GetPoolAmountsString 获取 pool 金额字符串（按交易对顺序，用于写入 .env）
+func (s *Scheduler) GetPoolAmountsString() string {
+	s.poolMu.Lock()
+	defer s.poolMu.Unlock()
+
+	parts := make([]string, len(s.cfg.TradePairs))
+	for i, pair := range s.cfg.TradePairs {
+		pair = strings.TrimSpace(pair)
+		parts[i] = strconv.FormatFloat(s.pool[pair], 'f', 8, 64)
+	}
+	return strings.Join(parts, ",")
+}
+
 // GetPool 获取当前 pool 状态（线程安全）
 func (s *Scheduler) GetPool() map[string]float64 {
 	s.poolMu.Lock()
