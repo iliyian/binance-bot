@@ -239,7 +239,7 @@ func (n *Notifier) SendErrorNotice(errMsg string) {
 }
 
 // SendBollAlert 发送布林带突破提醒
-func (n *Notifier) SendBollAlert(symbol, direction string, isUpper bool, details []BollAlertDetail) {
+func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction string, isUpper bool, details []BollAlertDetail) {
 	var sb strings.Builder
 
 	icon := "📈"
@@ -249,6 +249,7 @@ func (n *Notifier) SendBollAlert(symbol, direction string, isUpper bool, details
 
 	sb.WriteString("🔔 <b>布林带突破提醒</b>\n\n")
 	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n", symbol))
+	sb.WriteString(fmt.Sprintf("💰 实时价格: <code>%.2f</code>\n", currentPrice))
 	sb.WriteString(fmt.Sprintf("%s %s\n\n", icon, direction))
 
 	for _, d := range details {

@@ -202,6 +202,11 @@ func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []Interva
 		return
 	}
 
+	currentPrice := 0.0
+	if len(results) > 0 && results[0].Boll != nil {
+		currentPrice = results[0].Boll.Close
+	}
+
 	// 构建通知所需的数据（避免循环依赖，传递简单结构）
 	details := make([]telegram.BollAlertDetail, len(results))
 	for i, r := range results {
@@ -214,7 +219,7 @@ func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []Interva
 			Lower:    r.Boll.Lower,
 		}
 	}
-	m.notifier.SendBollAlert(symbol, breakTypeName(breakDir), breakDir == BreakUpper, details)
+	m.notifier.SendBollAlert(symbol, currentPrice, breakTypeName(breakDir), breakDir == BreakUpper, details)
 }
 
 func breakTypeName(bt BreakType) string {
