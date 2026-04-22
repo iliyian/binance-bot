@@ -105,12 +105,15 @@ go build -o binance-bot .
 | `TRADE_AMOUNTS` | ✅ | 每个交易对金额(USDT) | `10,5` |
 | `POOL_AMOUNTS` | ❌ | 初始Pool金额(USDT)，重启恢复用 | `0.5,0.3` |
 | `CRON_SCHEDULE` | ❌ | 定时规则 (6位cron) | `0 0 9 * * *` |
+| `DCA_ENABLED` | ❌ | 是否启用定投定时任务 | `true` |
 | `TIMEZONE` | ❌ | 时区 | `Asia/Shanghai` |
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:ABC...` |
 | `TELEGRAM_CHAT_ID` | ❌ | Telegram Chat ID | `-100123456` |
 | `LOG_LEVEL` | ❌ | 日志级别 | `info` |
 
 ### Cron 表达式示例
+
+将 `DCA_ENABLED=false` 可关闭定投定时任务；关闭后 Telegram 与布林监控仍可继续运行。
 
 格式：`秒 分 时 日 月 周`
 

@@ -44,6 +44,7 @@ func main() {
 	log.Printf("📋 交易对: %v", cfg.TradePairs)
 	log.Printf("💰 投入金额: %v USDT", cfg.TradeAmounts)
 	log.Printf("🏊 初始 Pool: %v USDT", cfg.PoolAmounts)
+	log.Printf("🔘 定投开关: %t", cfg.DCAEnabled)
 	log.Printf("⏰ 定时规则: %s", cfg.CronSchedule)
 	log.Printf("🌍 时区: %s", cfg.Timezone.String())
 	if cfg.AutoEarn {
@@ -120,8 +121,12 @@ func main() {
 	}
 
 	// 启动定时任务
-	if err := sched.Start(); err != nil {
-		log.Fatalf("❌ 定时任务启动失败: %v", err)
+	if cfg.DCAEnabled {
+		if err := sched.Start(); err != nil {
+			log.Fatalf("❌ 定时任务启动失败: %v", err)
+		}
+	} else {
+		log.Println("⏸ 定投已禁用，跳过定时任务启动")
 	}
 
 	// 启动价格监控
@@ -131,7 +136,7 @@ func main() {
 
 	// 发送启动通知
 	if notifier != nil {
-		notifier.SendStartupNotice(cfg.TradePairs, cfg.TradeAmounts, cfg.CronSchedule, cfg.PoolAmounts)
+		notifier.SendStartupNotice(cfg.TradePairs, cfg.TradeAmounts, cfg.CronSchedule, cfg.PoolAmounts, cfg.DCAEnabled)
 	}
 
 	log.Println("✅ 机器人运行中，按 Ctrl+C 退出")

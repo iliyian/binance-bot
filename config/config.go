@@ -21,10 +21,10 @@ type Config struct {
 	BinanceDemoSecretKey string
 
 	// 定投配置
-	TradePairs   []string   // 交易对列表
-	TradeAmounts []string   // 对应金额列表 (字符串保留精度)
-	PoolAmounts  []float64  // 每个交易对的初始 pool 值 (用于重启恢复)
-	CronSchedule string     // cron 表达式
+	TradePairs   []string  // 交易对列表
+	TradeAmounts []string  // 对应金额列表 (字符串保留精度)
+	PoolAmounts  []float64 // 每个交易对的初始 pool 值 (用于重启恢复)
+	CronSchedule string    // cron 表达式
 	Timezone     *time.Location
 
 	// Telegram 通知
@@ -34,6 +34,7 @@ type Config struct {
 	// 可选
 	UseDemo        bool   // 使用 demo.binance.com 模拟交易
 	BinanceBaseURL string // 自定义 API 地址，最高优先级
+	DCAEnabled     bool   // 是否启用定投
 	AutoEarn       bool   // 自动与活期理财互转
 	LogLevel       string
 
@@ -132,6 +133,14 @@ func Load() (*Config, error) {
 
 	// 可选配置
 	cfg.BinanceBaseURL = os.Getenv("BINANCE_BASE_URL")
+	cfg.DCAEnabled = true
+	if v := strings.TrimSpace(os.Getenv("DCA_ENABLED")); v != "" {
+		enabled, err := strconv.ParseBool(v)
+		if err != nil {
+			return nil, fmt.Errorf("DCA_ENABLED 无效: %s", v)
+		}
+		cfg.DCAEnabled = enabled
+	}
 	cfg.AutoEarn = strings.ToLower(os.Getenv("AUTO_EARN")) == "true"
 
 	cfg.LogLevel = os.Getenv("LOG_LEVEL")

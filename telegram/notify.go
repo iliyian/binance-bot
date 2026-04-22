@@ -184,7 +184,7 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 }
 
 // SendStartupNotice 发送启动通知
-func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr string, poolAmounts []float64) {
+func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr string, poolAmounts []float64, dcaEnabled bool) {
 	var sb strings.Builder
 
 	sb.WriteString("🚀 <b>币安自动定投已启动</b>\n\n")
@@ -219,7 +219,12 @@ func (n *Notifier) SendStartupNotice(pairs []string, amounts []string, cronExpr 
 		}
 	}
 
-	sb.WriteString(fmt.Sprintf("\n⏰ 定时规则: <code>%s</code>\n", cronExpr))
+	sb.WriteString(fmt.Sprintf("\n🔘 定投开关: <code>%t</code>\n", dcaEnabled))
+	if dcaEnabled {
+		sb.WriteString(fmt.Sprintf("⏰ 定时规则: <code>%s</code>\n", cronExpr))
+	} else {
+		sb.WriteString("⏸ 定时任务未启动\n")
+	}
 	sb.WriteString(fmt.Sprintf("📅 启动时间: %s\n", time.Now().Format("2006-01-02 15:04:05")))
 	sb.WriteString(fmt.Sprintf("🔗 版本: <code>%s</code>", n.commitHash))
 
