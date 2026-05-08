@@ -1,4 +1,4 @@
-name: Build and Push Docker Image
+name: Build, Push, and Release
 
 on:
   push:
@@ -14,7 +14,7 @@ jobs:
     runs-on: ubuntu-latest
 
     permissions:
-      contents: write
+      contents: read
       packages: write
 
     steps:
@@ -55,7 +55,82 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
+  build-binaries:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+            suffix: ""
+            artifact: linux-amd64
+          - goos: linux
+            goarch: arm64
+            suffix: ""
+            artifact: linux-arm64
+          - goos: darwin
+            goarch: amd64
+            suffix: ""
+            artifact: darwin-amd64
+          - goos: darwin
+            goarch: arm64
+            suffix: ""
+            artifact: darwin-arm64
+          - goos: windows
+            goarch: amd64
+            suffix: .exe
+            artifact: windows-amd64
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          output="dist/binance-bot_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.suffix }}"
+          CGO_ENABLED=0 GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+            go build -trimpath -ldflags="-s -w -X main.commitHash=${{ github.sha }}" \
+            -o "$output" .
+
+      - name: Upload binary artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: binance-bot-${{ matrix.artifact }}
+          path: dist/binance-bot_${{ github.ref_name }}_${{ matrix.goos }}_${{ matrix.goarch }}${{ matrix.suffix }}
+          if-no-files-found: error
+
+  release:
+    runs-on: ubuntu-latest
+    needs: [build-and-push, build-binaries]
+
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: binance-bot-*
+          path: dist
+          merge-multiple: true
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          overwrite_files: true
+          files: dist/*
