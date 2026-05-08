@@ -244,7 +244,7 @@ func (n *Notifier) SendErrorNotice(errMsg string) {
 }
 
 // SendBollAlert 发送布林带突破提醒
-func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction string, isUpper bool, details []BollAlertDetail) {
+func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction string, isUpper bool, details []BollAlertDetail, pricePrecision int) {
 	var sb strings.Builder
 
 	icon := "📈"
@@ -252,18 +252,22 @@ func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction 
 		icon = "📉"
 	}
 
+	formatPrice := func(value float64) string {
+		return fmt.Sprintf("%.*f", pricePrecision, value)
+	}
+
 	sb.WriteString("🔔 <b>布林带突破提醒</b>\n\n")
 	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n", symbol))
-	sb.WriteString(fmt.Sprintf("💰 实时价格: <code>%.2f</code>\n", currentPrice))
+	sb.WriteString(fmt.Sprintf("💰 实时价格: <code>%s</code>\n", formatPrice(currentPrice)))
 	sb.WriteString(fmt.Sprintf("%s %s\n\n", icon, direction))
 
 	for _, d := range details {
 		sb.WriteString(fmt.Sprintf("⏱ <b>%s</b>\n", d.Interval))
-		sb.WriteString(fmt.Sprintf("   最高价: <code>%.2f</code>\n", d.High))
-		sb.WriteString(fmt.Sprintf("   最低价: <code>%.2f</code>\n", d.Low))
-		sb.WriteString(fmt.Sprintf("   上轨:   <code>%.2f</code>\n", d.Upper))
-		sb.WriteString(fmt.Sprintf("   中轨:   <code>%.2f</code>\n", d.Middle))
-		sb.WriteString(fmt.Sprintf("   下轨:   <code>%.2f</code>\n\n", d.Lower))
+		sb.WriteString(fmt.Sprintf("   最高价: <code>%s</code>\n", formatPrice(d.High)))
+		sb.WriteString(fmt.Sprintf("   最低价: <code>%s</code>\n", formatPrice(d.Low)))
+		sb.WriteString(fmt.Sprintf("   上轨:   <code>%s</code>\n", formatPrice(d.Upper)))
+		sb.WriteString(fmt.Sprintf("   中轨:   <code>%s</code>\n", formatPrice(d.Middle)))
+		sb.WriteString(fmt.Sprintf("   下轨:   <code>%s</code>\n\n", formatPrice(d.Lower)))
 	}
 
 	sb.WriteString(fmt.Sprintf("📅 %s", time.Now().Format("2006-01-02 15:04:05")))

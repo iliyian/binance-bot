@@ -22,12 +22,14 @@ type IntervalResult struct {
 
 // Monitor 价格监控服务
 type Monitor struct {
-	cfg          *config.Config
-	notifier     *telegram.Notifier
-	client       *http.Client
-	stop         chan struct{}
-	done         chan struct{}
-	prevAllBreak sync.Map // map[string]bool 上次检查各交易对是否全级别突破
+	cfg             *config.Config
+	notifier        *telegram.Notifier
+	client          *http.Client
+	stop            chan struct{}
+	done            chan struct{}
+	prevAllBreak    sync.Map // map[string]bool 上次检查各交易对是否全级别突破
+	precisionMu     sync.RWMutex
+	pricePrecisions map[string]int
 }
 
 // New 创建监控服务
@@ -43,6 +45,9 @@ func New(cfg *config.Config, notifier *telegram.Notifier) *Monitor {
 
 // Start 启动监控
 func (m *Monitor) Start() {
+	if err := m.loadPricePrecisions(); err != nil {
+		log.Printf("⚠️ 获取币种价格精度失败，改用默认小数位: %v", err)
+	}
 	go m.run()
 	log.Printf("📡 价格监控已启动，检查间隔: %s", m.cfg.BollMonitorCheckInterval)
 	for _, sym := range m.cfg.BollMonitorSymbols {
@@ -152,10 +157,16 @@ func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResul
 	defer cancel()
 
 	results, allBreak, breakDir := m.checkIntervals(ctx, symbol, intervals)
+	pricePrecision := m.pricePrecision(symbol)
 
 	for _, r := range results {
-		log.Printf("📊 %s [%s] 上轨=%.4f 均值=%.4f 下轨=%.4f 最高=%.4f 最低=%.4f",
-			symbol, r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower, r.Boll.High, r.Boll.Low)
+		log.Printf("📊 %s [%s] 上轨=%s 均值=%s 下轨=%s 最高=%s 最低=%s",
+			symbol, r.Interval,
+			m.formatPrice(symbol, r.Boll.Upper),
+			m.formatPrice(symbol, r.Boll.Middle),
+			m.formatPrice(symbol, r.Boll.Lower),
+			m.formatPrice(symbol, r.Boll.High),
+			m.formatPrice(symbol, r.Boll.Low))
 	}
 
 	if allBreak {
@@ -166,7 +177,7 @@ func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResul
 	wasBreak, _ := prev.(bool)
 
 	if allBreak && !wasBreak {
-		m.sendAlert(symbol, breakDir, results)
+		m.sendAlert(symbol, breakDir, results, pricePrecision)
 	}
 
 	return results
@@ -179,7 +190,7 @@ func (m *Monitor) CheckNow() string {
 		results := m.checkSymbol(sym.Symbol, sym.Intervals)
 		sb.WriteString(fmt.Sprintf("<b>%s</b>", sym.Symbol))
 		if len(results) > 0 {
-			sb.WriteString(fmt.Sprintf("  实时价格: %.2f", results[0].Boll.Close))
+			sb.WriteString(fmt.Sprintf("  实时价格: %s", m.formatPrice(sym.Symbol, results[0].Boll.Close)))
 		}
 		sb.WriteString("\n")
 		for _, r := range results {
@@ -189,15 +200,20 @@ func (m *Monitor) CheckNow() string {
 			} else if r.BreakType == BreakLower {
 				status = "⬇️ 突破下轨"
 			}
-			sb.WriteString(fmt.Sprintf("  [%s] 上轨=%.2f 均值=%.2f 下轨=%.2f\n", r.Interval, r.Boll.Upper, r.Boll.Middle, r.Boll.Lower))
-			sb.WriteString(fmt.Sprintf("  最高=%.2f 最低=%.2f %s\n", r.Boll.High, r.Boll.Low, status))
+			sb.WriteString(fmt.Sprintf("  [%s] 上轨=%s 均值=%s 下轨=%s\n", r.Interval,
+				m.formatPrice(sym.Symbol, r.Boll.Upper),
+				m.formatPrice(sym.Symbol, r.Boll.Middle),
+				m.formatPrice(sym.Symbol, r.Boll.Lower)))
+			sb.WriteString(fmt.Sprintf("  最高=%s 最低=%s %s\n",
+				m.formatPrice(sym.Symbol, r.Boll.High),
+				m.formatPrice(sym.Symbol, r.Boll.Low), status))
 		}
 		sb.WriteString("\n")
 	}
 	return sb.String()
 }
 
-func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []IntervalResult) {
+func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []IntervalResult, pricePrecision int) {
 	if m.notifier == nil {
 		return
 	}
@@ -219,7 +235,7 @@ func (m *Monitor) sendAlert(symbol string, breakDir BreakType, results []Interva
 			Lower:    r.Boll.Lower,
 		}
 	}
-	m.notifier.SendBollAlert(symbol, currentPrice, breakTypeName(breakDir), breakDir == BreakUpper, details)
+	m.notifier.SendBollAlert(symbol, currentPrice, breakTypeName(breakDir), breakDir == BreakUpper, details, pricePrecision)
 }
 
 func breakTypeName(bt BreakType) string {
