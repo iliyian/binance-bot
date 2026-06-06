@@ -41,9 +41,11 @@ type Config struct {
 	// 布林带价格监控
 	BollMonitorEnabled       bool
 	BollMonitorSymbols       []BollMonitorSymbolConfig // 监控的交易对及其 K 线级别
-	BollMonitorPeriod        int                       // 布林带周期，默认 20
-	BollMonitorStdDev        float64                   // 布林带标准差倍数，默认 2.0
-	BollMonitorCheckInterval time.Duration             // 检查间隔，默认 1m
+	BollMonitorPeriod int     // 布林带周期，默认 20
+	BollMonitorStdDev float64 // 布林带标准差倍数，默认 2.0
+
+	// 自定义合成交易对
+	SyntheticPairs map[string]string // 合成交易对名 → 分子/分母表达式，如 XAUXAG → XAUUSDT/XAGUSDT
 }
 
 // BollMonitorSymbolConfig 单个监控交易对配置
@@ -165,6 +167,28 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// 自定义合成交易对: SYNTHETIC_PAIRS=XAUXAG:XAUUSDT/XAGUSDT
+	cfg.SyntheticPairs = make(map[string]string)
+	if synPairs := os.Getenv("SYNTHETIC_PAIRS"); synPairs != "" {
+		for _, part := range strings.Split(synPairs, ",") {
+			part = strings.TrimSpace(part)
+			if part == "" {
+				continue
+			}
+			idx := strings.Index(part, ":")
+			if idx < 0 {
+				return nil, fmt.Errorf("SYNTHETIC_PAIRS 格式错误: %s (应为 NAME:NUM/DEN)", part)
+			}
+			name := strings.TrimSpace(part[:idx])
+			expr := strings.TrimSpace(part[idx+1:])
+			ratioParts := strings.Split(expr, "/")
+			if len(ratioParts) != 2 {
+				return nil, fmt.Errorf("SYNTHETIC_PAIRS 表达式格式错误: %s (应为 NUM/DEN)", expr)
+			}
+			cfg.SyntheticPairs[name] = expr
+		}
+	}
+
 	// 配置冲突检查
 	if cfg.AutoEarn && cfg.UseDemo {
 		return nil, fmt.Errorf("AUTO_EARN 不能与 USE_DEMO 同时启用（模拟环境不支持理财 API）")
@@ -224,14 +248,6 @@ func Load() (*Config, error) {
 			cfg.BollMonitorStdDev = f
 		}
 
-		cfg.BollMonitorCheckInterval = 1 * time.Minute
-		if v := os.Getenv("BOLL_MONITOR_CHECK_INTERVAL"); v != "" {
-			d, err := time.ParseDuration(v)
-			if err != nil {
-				return nil, fmt.Errorf("BOLL_MONITOR_CHECK_INTERVAL 无效: %s（示例: 30s, 1m, 5m）", v)
-			}
-			cfg.BollMonitorCheckInterval = d
-		}
 	}
 
 	return cfg, nil

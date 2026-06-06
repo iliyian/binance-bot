@@ -31,6 +31,13 @@ type BollAlertDetail struct {
 	Upper    float64
 	Middle   float64
 	Lower    float64
+
+	// 合成交易对底层价格 (仅合成交易对使用)
+	Synthetic bool
+	NumSymbol string
+	DenSymbol string
+	NumPrice  float64
+	DenPrice  float64
 }
 
 // Notifier Telegram 通知器
@@ -259,6 +266,14 @@ func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction 
 	sb.WriteString("🔔 <b>布林带突破提醒</b>\n\n")
 	sb.WriteString(fmt.Sprintf("📊 <b>%s</b>\n", symbol))
 	sb.WriteString(fmt.Sprintf("💰 实时价格: <code>%s</code>\n", formatPrice(currentPrice)))
+
+	if len(details) > 0 && details[0].Synthetic {
+		// 合成交易对同时显示底层价格
+		d0 := details[0]
+		sb.WriteString(fmt.Sprintf("   └ %s: <code>%.4f</code>  %s: <code>%.4f</code>\n",
+			d0.NumSymbol, d0.NumPrice, d0.DenSymbol, d0.DenPrice))
+	}
+
 	sb.WriteString(fmt.Sprintf("%s %s\n\n", icon, direction))
 
 	for _, d := range details {
