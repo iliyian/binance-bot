@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"sort"
 )
 
 // Config 应用配置结构
@@ -248,6 +249,10 @@ func Load() (*Config, error) {
 			cfg.BollMonitorStdDev = f
 		}
 
+		// 按字典序排序
+		sort.Slice(cfg.BollMonitorSymbols, func(i, j int) bool {
+			return cfg.BollMonitorSymbols[i].Symbol < cfg.BollMonitorSymbols[j].Symbol
+		})
 	}
 
 	return cfg, nil
