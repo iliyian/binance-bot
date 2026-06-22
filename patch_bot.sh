@@ -1,1 +1,0 @@
-sed -i 's/{Command: "monitor", Description: "查询价格监控状态"},/{Command: "monitor", Description: "查询价格监控状态"},\n\t\t{Command: "addmonitor", Description: "添加监控交易对，用法: \/addmonitor BTCUSDT 1h 4h"},\n\t\t{Command: "delmonitor", Description: "删除监控交易对，用法: \/delmonitor BTCUSDT"},/' telegram/bot.go
