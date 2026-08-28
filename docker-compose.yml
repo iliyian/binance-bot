@@ -3,6 +3,7 @@ services:
     image: ghcr.io/iliyian/binance-bot:latest
     container_name: binance-bot
     restart: always
+    network_mode: host
     env_file:
       - .env
     volumes:
