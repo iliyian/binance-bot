@@ -412,6 +412,10 @@ func (w *WSClient) handleMessage(msg []byte) {
 
 func (w *WSClient) processAggTrade(e *aggTradeEvent) {
 	price, _ := strconv.ParseFloat(e.Price, 64)
+	// 币安合约 @trade 流会推送 p=0/q=0/X=NA 的占位事件，会污染 tracker 并触发假突破，直接丢弃
+	if price <= 0 {
+		return
+	}
 	symbol := strings.ToUpper(e.Symbol)
 	tradeTime := e.TradeTime
 
@@ -523,6 +527,11 @@ func (w *WSClient) checkBreakout(it *intervalTracker, symbol string, synthetic b
 		return pendingAlert{}, false
 	}
 	it.lastCheckMs = nowMs
+
+	// 数据未就绪（尚未收到真实成交）时不评估突破，防止 0 值误报
+	if it.close <= 0 || it.high <= 0 || it.low <= 0 {
+		return pendingAlert{}, false
+	}
 
 	boll := *it.boll
 	boll.High = it.high
