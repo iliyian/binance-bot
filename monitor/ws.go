@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,6 +22,9 @@ const (
 	futuresWSBaseURL = "wss://fstream.binance.com/stream"
 	wsReconnectDelay = 5 * time.Second
 	wsPingInterval   = 30 * time.Second
+	// 看门狗：超过该时长未收到任何帧（数据/ping）则判定连接死亡并重连
+	// （fstream 每 3 分钟发一次 ping，正常连接不会触发）
+	wsReadDeadline    = 5 * time.Minute
 	checkThrottleMs   = 500
 	bollPeriodDefault = 20
 )
@@ -123,6 +128,8 @@ type WSClient struct {
 	connDone chan struct{}
 	stopCh   chan struct{}
 	doneCh   chan struct{}
+
+	everConnected bool // 是否成功连上过（区分首连与重连）
 }
 
 func NewWSClient(cfg *config.Config, notifier *telegram.Notifier, httpClient *http.Client) *WSClient {
@@ -295,7 +302,14 @@ func (w *WSClient) connectAndRead() error {
 	}
 
 	url := fmt.Sprintf("%s?streams=%s", futuresWSBaseURL, strings.Join(streams, "/"))
-	log.Printf("🔗 WebSocket 连接: %d streams", len(streams))
+	proxyInfo := os.Getenv("HTTPS_PROXY")
+	if proxyInfo == "" {
+		proxyInfo = os.Getenv("https_proxy")
+	}
+	if proxyInfo == "" {
+		proxyInfo = "无（直连）"
+	}
+	log.Printf("🔗 WebSocket 连接: %d streams (代理: %s)", len(streams), proxyInfo)
 
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
@@ -310,16 +324,50 @@ func (w *WSClient) connectAndRead() error {
 	w.connDone = connDone
 	w.mu.Unlock()
 
-	log.Println("✅ WebSocket 已连接，实时接收 aggTrade")
+	log.Println("✅ WebSocket 已连接，实时接收成交数据")
+
+	// 重连时刷新布林带基线，避免断线期间 K 线状态漂移
+	// （此刻旧读循环已退出、新读循环未启动，无并发写，无需加锁）
+	if w.everConnected {
+		w.reloadBaselines()
+	}
+	w.everConnected = true
 
 	go w.pingLoop(conn, connDone)
+
+	// 读看门狗：防止代理隧道半死（握手成功后上游黑洞）导致 ReadMessage 永久阻塞
+	conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+	conn.SetPingHandler(func(appData string) error {
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
+		return conn.WriteControl(websocket.PongMessage, []byte(appData), time.Now().Add(5*time.Second))
+	})
 
 	for {
 		_, msg, err := conn.ReadMessage()
 		if err != nil {
+			if ne, ok := err.(net.Error); ok && ne.Timeout() {
+				return fmt.Errorf("超过 %v 未收到任何帧，判定连接死亡", wsReadDeadline)
+			}
 			return fmt.Errorf("读取消息失败: %w", err)
 		}
+		conn.SetReadDeadline(time.Now().Add(wsReadDeadline))
 		w.handleMessage(msg)
+	}
+}
+
+// reloadBaselines 重新加载所有交易对的布林带基线（重连后调用）
+func (w *WSClient) reloadBaselines() {
+	for symbol, pt := range w.trackers {
+		syn := resolveSynthetic(w.cfg.SyntheticPairs, symbol)
+		for interval, it := range pt.intervals {
+			if err := w.loadBollBaseline(it, symbol, interval, syn.synthetic, syn.expr); err != nil {
+				log.Printf("⚠️ %s [%s] 重连后布林带基线加载失败: %v", symbol, interval, err)
+			} else {
+				it.wasBreaking = false
+				it.breakDir = BreakNone
+				log.Printf("🔄 %s [%s] 重连后布林带基线已刷新", symbol, interval)
+			}
+		}
 	}
 }
 
@@ -329,7 +377,8 @@ func (w *WSClient) buildStreamList() []string {
 
 	seen := make(map[string]bool)
 	for rawSymbol := range w.streamIndex {
-		seen[strings.ToLower(rawSymbol)+"@aggTrade"] = true
+		// 实测 fstream 的 @aggTrade 长时间零推送（@trade 正常），改订 @trade
+		seen[strings.ToLower(rawSymbol)+"@trade"] = true
 	}
 
 	streams := make([]string, 0, len(seen))
@@ -346,7 +395,7 @@ func (w *WSClient) handleMessage(msg []byte) {
 		if err := json.Unmarshal(msg, &event); err != nil {
 			return
 		}
-		if event.EventType == "aggTrade" {
+		if event.EventType == "trade" || event.EventType == "aggTrade" {
 			w.processAggTrade(&event)
 		}
 		return
@@ -356,7 +405,7 @@ func (w *WSClient) handleMessage(msg []byte) {
 	if err := json.Unmarshal(wrapper.Data, &event); err != nil {
 		return
 	}
-	if event.EventType == "aggTrade" {
+	if event.EventType == "trade" || event.EventType == "aggTrade" {
 		w.processAggTrade(&event)
 	}
 }
