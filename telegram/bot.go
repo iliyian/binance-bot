@@ -31,6 +31,10 @@ type MonitorStatusGetter func() string
 // MonitorCheckNow 立即执行监控检查并返回结果的回调函数类型
 type MonitorCheckNow func() string
 
+type MonitorAdder func(args []string) (string, error)
+
+type MonitorRemover func(args []string) (string, error)
+
 // Bot Telegram Bot 命令处理器
 type Bot struct {
 	botToken      string
@@ -43,6 +47,8 @@ type Bot struct {
 	envUpdater    EnvUpdater
 	monitorGetter MonitorStatusGetter
 	monitorCheck  MonitorCheckNow
+	monitorAdder  MonitorAdder
+	monitorRemover MonitorRemover
 }
 
 // TelegramUpdate Telegram 更新结构
@@ -125,6 +131,14 @@ func (b *Bot) SetMonitorStatusGetter(getter MonitorStatusGetter) {
 }
 
 // SetMonitorCheckNow 设置立即执行监控检查的回调
+func (b *Bot) SetMonitorAdder(adder MonitorAdder) {
+	b.monitorAdder = adder
+}
+
+func (b *Bot) SetMonitorRemover(remover MonitorRemover) {
+	b.monitorRemover = remover
+}
+
 func (b *Bot) SetMonitorCheckNow(checker MonitorCheckNow) {
 	b.monitorCheck = checker
 }
@@ -164,6 +178,8 @@ func (b *Bot) registerCommands() error {
 		{Command: "pool", Description: "查询各交易对的 Pool 累积金额"},
 		{Command: "setpool", Description: "设置 Pool 金额，用法: /setpool BTCUSDT 0.5"},
 		{Command: "monitor", Description: "查询价格监控状态"},
+		{Command: "addmonitor", Description: "添加监控交易对，用法: /addmonitor BTCUSDT 1h 4h"},
+		{Command: "delmonitor", Description: "删除监控交易对，用法: /delmonitor BTCUSDT"},
 		{Command: "help", Description: "显示帮助信息"},
 	}
 
@@ -288,6 +304,10 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		b.handlePool()
 	case "/setpool":
 		b.handleSetPool(args)
+	case "/addmonitor":
+		b.handleAddMonitor(args)
+	case "/delmonitor":
+		b.handleDelMonitor(args)
 	case "/monitor":
 		b.handleMonitor()
 	case "/help", "/start":
@@ -640,4 +660,46 @@ func boolToEmoji(b bool) string {
 		return "✅ 是"
 	}
 	return "❌ 否"
+}
+
+// handleAddMonitor 处理 /addmonitor 命令
+func (b *Bot) handleAddMonitor(args []string) {
+	if b.monitorAdder == nil {
+		b.sendReply("⚠️ 价格监控功能未启用")
+		return
+	}
+
+	if len(args) == 0 {
+		b.sendReply("⚠️ 用法: <code>/addmonitor &lt;交易对&gt; [级别1] [级别2] ...</code>\n例: <code>/addmonitor BTCUSDT</code>\n例: <code>/addmonitor BTCUSDT 1h 4h</code>")
+		return
+	}
+
+	res, err := b.monitorAdder(args)
+	if err != nil {
+		b.sendReply(fmt.Sprintf("❌ 添加失败: %s", html.EscapeString(err.Error())))
+		return
+	}
+
+	b.sendReply(fmt.Sprintf("✅ <b>添加成功</b>\n\n%s", res))
+}
+
+// handleDelMonitor 处理 /delmonitor 命令
+func (b *Bot) handleDelMonitor(args []string) {
+	if b.monitorRemover == nil {
+		b.sendReply("⚠️ 价格监控功能未启用")
+		return
+	}
+
+	if len(args) == 0 {
+		b.sendReply("⚠️ 用法: <code>/delmonitor &lt;交易对&gt;</code>\n例: <code>/delmonitor BTCUSDT</code>")
+		return
+	}
+
+	res, err := b.monitorRemover(args)
+	if err != nil {
+		b.sendReply(fmt.Sprintf("❌ 删除失败: %s", html.EscapeString(err.Error())))
+		return
+	}
+
+	b.sendReply(fmt.Sprintf("✅ <b>删除成功</b>\n\n%s", res))
 }
