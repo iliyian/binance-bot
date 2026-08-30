@@ -53,7 +53,12 @@ type aggTradeEvent struct {
 	Symbol    string `json:"s"`
 	Price     string `json:"p"`
 	Quantity  string `json:"q"`
-	TradeTime int64  `json:"T"`
+	// ⚠️ 必须显式占住 "t"（Trade ID）：payload 同时含 "T"(成交时间ms) 和 "t"(成交ID)，
+	// Go encoding/json 的大小写不敏感回退匹配会把 "t" 也解析进 tag 为 "T" 的 TradeTime，
+	// 后出现的 "t" 覆盖成成交ID（~5.7e8），导致 candleStart 永远追不上 REST 基线（~1.8e12），
+	// K 线永不轮转、布林带冻结在旧值（2026-08-30 实锤根因）。
+	TradeID   int64 `json:"t"`
+	TradeTime int64 `json:"T"`
 }
 
 type streamWrapper struct {
@@ -417,7 +422,17 @@ func (w *WSClient) processAggTrade(e *aggTradeEvent) {
 		return
 	}
 	symbol := strings.ToUpper(e.Symbol)
+	// 成交时间健全性校验：不在合理毫秒区间（2024~2100年）则依次回退 EventTime / 本地时间，
+	// 防止上游字段变更再次把轮转时间轴打乱
 	tradeTime := e.TradeTime
+	if tradeTime < 1704067200000 || tradeTime > 4102444800000 {
+		if e.EventTime >= 1704067200000 && e.EventTime <= 4102444800000 {
+			tradeTime = e.EventTime
+		} else {
+			tradeTime = time.Now().UnixMilli()
+		}
+		log.Printf("⚠️ %s 成交时间异常 (T=%d E=%d)，回退为 %d", symbol, e.TradeTime, e.EventTime, tradeTime)
+	}
 
 	w.mu.Lock()
 	w.latest[symbol] = price
