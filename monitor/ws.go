@@ -81,10 +81,6 @@ type intervalTracker struct {
 	stddev float64
 	closes []float64
 	boll   *BollResult
-
-	wasBreaking bool
-	breakDir    BreakType
-	lastCheckMs int64
 }
 
 type pairTracker struct {
@@ -94,6 +90,11 @@ type pairTracker struct {
 	denSymbol string
 
 	intervals map[string]*intervalTracker
+
+	// 全部突破的边沿状态（交易对级别）：只有「并非全部突破 → 全部突破」
+	// 的跳变才发一次提醒，持续保持全部突破不重复通知（2026-08-31 主人指示）
+	wasAllBreak bool
+	lastCheckMs int64
 }
 
 // streamBinding maps a raw Binance symbol to the trackers that need it
@@ -108,14 +109,9 @@ type streamBinding struct {
 type pendingAlert struct {
 	symbol    string
 	bt        BreakType
-	it        *intervalTracker
 	precision int
-	// synthetic pair underlying prices (zero for normal pairs)
-	synthetic bool
-	numSymbol string
-	denSymbol string
-	numPrice  float64
-	denPrice  float64
+	close     float64
+	details   []telegram.BollAlertDetail
 }
 
 // WSClient manages Binance WebSocket aggTrade streams and real-time Bollinger Band detection
@@ -368,8 +364,7 @@ func (w *WSClient) reloadBaselines() {
 			if err := w.loadBollBaseline(it, symbol, interval, syn.synthetic, syn.expr); err != nil {
 				log.Printf("⚠️ %s [%s] 重连后布林带基线加载失败: %v", symbol, interval, err)
 			} else {
-				it.wasBreaking = false
-				it.breakDir = BreakNone
+				pt.wasAllBreak = false
 				log.Printf("🔄 %s [%s] 重连后布林带基线已刷新", symbol, interval)
 			}
 		}
@@ -468,21 +463,16 @@ func (w *WSClient) processAggTrade(e *aggTradeEvent) {
 			ratio := numPrice / denPrice
 			for _, it := range sb.intervals {
 				w.updateCandle(it, ratio, tradeTime)
-				if a, ok := w.checkBreakout(it, sb.pairSymbol, true); ok {
-					a.synthetic = true
-					a.numSymbol = sb.numSymbol
-					a.denSymbol = sb.denSymbol
-					a.numPrice = numPrice
-					a.denPrice = denPrice
-					alerts = append(alerts, a)
-				}
+			}
+			if a, ok := w.evaluateBinding(sb, numPrice, denPrice); ok {
+				alerts = append(alerts, a)
 			}
 		} else {
 			for _, it := range sb.intervals {
 				w.updateCandle(it, price, tradeTime)
-				if a, ok := w.checkBreakout(it, sb.pairSymbol, false); ok {
-					alerts = append(alerts, a)
-				}
+			}
+			if a, ok := w.evaluateBinding(sb, 0, 0); ok {
+				alerts = append(alerts, a)
 			}
 		}
 	}
@@ -528,95 +518,112 @@ func (w *WSClient) updateCandle(it *intervalTracker, price float64, tradeTime in
 	it.high = price
 	it.low = price
 	it.close = price
-	it.wasBreaking = false
-	it.breakDir = BreakNone
 }
 
-func (w *WSClient) checkBreakout(it *intervalTracker, symbol string, synthetic bool) (pendingAlert, bool) {
-	if it.boll == nil {
+// evaluateBinding 在交易对层面评估「全部 interval 突破」状态：
+// 只有从「并非全部突破」转为「全部突破」的边沿才产生一次提醒，
+// 持续保持全部突破状态不会重复发通知（2026-08-31 主人指示）。
+func (w *WSClient) evaluateBinding(sb *streamBinding, numPrice, denPrice float64) (pendingAlert, bool) {
+	pt := w.trackers[sb.pairSymbol]
+	if pt == nil {
 		return pendingAlert{}, false
 	}
 
 	nowMs := time.Now().UnixMilli()
-	if nowMs-it.lastCheckMs < checkThrottleMs {
+	if nowMs-pt.lastCheckMs < checkThrottleMs {
 		return pendingAlert{}, false
 	}
-	it.lastCheckMs = nowMs
+	pt.lastCheckMs = nowMs
 
-	// 数据未就绪（尚未收到真实成交）时不评估突破，防止 0 值误报
-	if it.close <= 0 || it.high <= 0 || it.low <= 0 {
-		return pendingAlert{}, false
+	precision := defaultPricePrecision
+	if sb.synthetic {
+		precision = 4
 	}
 
-	boll := *it.boll
-	boll.High = it.high
-	boll.Low = it.low
-	boll.Close = it.close
+	allBreak := true
+	var dir BreakType
+	closePrice := 0.0
+	details := make([]telegram.BollAlertDetail, 0, len(sb.intervals))
 
-	bt := boll.Break()
-	isBreaking := bt != BreakNone
-
-	if isBreaking && !it.wasBreaking {
-		it.wasBreaking = true
-		it.breakDir = bt
-
-		precision := defaultPricePrecision
-		if synthetic {
-			precision = 4
+	for _, it := range sb.intervals {
+		// 数据未就绪（尚未收到真实成交）时不评估突破，防止 0 值误报
+		if it.boll == nil || it.close <= 0 || it.high <= 0 || it.low <= 0 {
+			allBreak = false
+			break
 		}
-		return pendingAlert{symbol: symbol, bt: bt, it: it, precision: precision}, true
+
+		boll := *it.boll
+		boll.High = it.high
+		boll.Low = it.low
+		boll.Close = it.close
+
+		bt := boll.Break()
+		if bt == BreakNone {
+			allBreak = false
+			break
+		}
+		if dir == BreakNone {
+			dir = bt
+		} else if dir != bt {
+			// 各 interval 方向不一致，不算全部突破
+			allBreak = false
+			break
+		}
+
+		closePrice = it.close
+		details = append(details, telegram.BollAlertDetail{
+			Interval:  it.interval,
+			High:      it.high,
+			Low:       it.low,
+			Upper:     it.boll.Upper,
+			Middle:    it.boll.Middle,
+			Lower:     it.boll.Lower,
+			Synthetic: sb.synthetic,
+			NumSymbol: sb.numSymbol,
+			DenSymbol: sb.denSymbol,
+			NumPrice:  numPrice,
+			DenPrice:  denPrice,
+		})
 	}
-	if !isBreaking {
-		it.wasBreaking = false
-		it.breakDir = BreakNone
+
+	if allBreak && !pt.wasAllBreak {
+		pt.wasAllBreak = true
+		return pendingAlert{
+			symbol:    sb.pairSymbol,
+			bt:        dir,
+			precision: precision,
+			close:     closePrice,
+			details:   details,
+		}, true
+	}
+	if !allBreak {
+		pt.wasAllBreak = false
 	}
 	return pendingAlert{}, false
 }
 
 func (w *WSClient) sendWSAlert(a pendingAlert) {
-	if a.synthetic {
-		log.Printf("🔔 %s(%s/%s) [%s] %s！比值=%.*f %s=%.4f %s=%.4f 上轨=%.*f 均值=%.*f 下轨=%.*f 最高=%.*f 最低=%.*f",
-			a.symbol, a.numSymbol, a.denSymbol, a.it.interval, breakTypeName(a.bt),
-			a.precision, a.it.close,
-			a.numSymbol, a.numPrice,
-			a.denSymbol, a.denPrice,
-			a.precision, a.it.boll.Upper,
-			a.precision, a.it.boll.Middle,
-			a.precision, a.it.boll.Lower,
-			a.precision, a.it.high,
-			a.precision, a.it.low)
+	if len(a.details) == 0 {
+		return
+	}
+	d0 := a.details[0]
+	if d0.Synthetic {
+		log.Printf("🔔 %s(%s/%s) 全部 K 线级别%s！比值=%.*f %s=%.4f %s=%.4f",
+			a.symbol, d0.NumSymbol, d0.DenSymbol, breakTypeName(a.bt),
+			a.precision, a.close,
+			d0.NumSymbol, d0.NumPrice,
+			d0.DenSymbol, d0.DenPrice)
 	} else {
-		log.Printf("🔔 %s [%s] %s！价格=%.*f 上轨=%.*f 均值=%.*f 下轨=%.*f 最高=%.*f 最低=%.*f",
-			a.symbol, a.it.interval, breakTypeName(a.bt),
-			a.precision, a.it.close,
-			a.precision, a.it.boll.Upper,
-			a.precision, a.it.boll.Middle,
-			a.precision, a.it.boll.Lower,
-			a.precision, a.it.high,
-			a.precision, a.it.low)
+		log.Printf("🔔 %s 全部 K 线级别%s！价格=%.*f",
+			a.symbol, breakTypeName(a.bt), a.precision, a.close)
 	}
 
 	if w.notifier == nil {
 		return
 	}
 
-	isUpper := a.bt == BreakUpper
-	detail := telegram.BollAlertDetail{
-		Interval:  a.it.interval,
-		High:      a.it.high,
-		Low:       a.it.low,
-		Upper:     a.it.boll.Upper,
-		Middle:    a.it.boll.Middle,
-		Lower:     a.it.boll.Lower,
-		Synthetic: a.synthetic,
-		NumSymbol: a.numSymbol,
-		DenSymbol: a.denSymbol,
-		NumPrice:  a.numPrice,
-		DenPrice:  a.denPrice,
-	}
-
-	w.notifier.SendBollAlert(a.symbol, a.it.close, breakTypeName(a.bt), isUpper,
-		[]telegram.BollAlertDetail{detail}, a.precision)
+	w.notifier.SendBollAlert(a.symbol, a.close, breakTypeName(a.bt), a.bt == BreakUpper,
+		a.details, a.precision)
 }
 
 func (w *WSClient) LatestPrice(symbol string) (float64, bool) {
