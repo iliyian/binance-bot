@@ -358,6 +358,9 @@ func (w *WSClient) connectAndRead() error {
 
 // reloadBaselines 重新加载所有交易对的布林带基线（重连后调用）
 func (w *WSClient) reloadBaselines() {
+	// 持写锁：/monitor 现在会并发读 tracker，重连刷新不能与读路径竞争
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for symbol, pt := range w.trackers {
 		syn := resolveSynthetic(w.cfg.SyntheticPairs, symbol)
 		for interval, it := range pt.intervals {
@@ -450,8 +453,8 @@ func (w *WSClient) processAggTrade(e *aggTradeEvent) {
 			}
 		}
 	}
-	w.mu.Unlock()
-
+	// tracker 更新与突破评估全程持写锁：/monitor 等外部读者以 RLock 快照，
+	// 避免与读循环的无锁写入构成数据竞争（2026-09-01 /monitor 改走 WS 实时值）
 	var alerts []pendingAlert
 	for _, sb := range bindings {
 		if sb.synthetic {
@@ -476,6 +479,7 @@ func (w *WSClient) processAggTrade(e *aggTradeEvent) {
 			}
 		}
 	}
+	w.mu.Unlock()
 
 	for _, a := range alerts {
 		w.sendWSAlert(a)

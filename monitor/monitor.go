@@ -164,13 +164,44 @@ func (m *Monitor) checkSymbol(symbol string, intervals []string) []IntervalResul
 	return results
 }
 
+// liveIntervals 直接读取 WebSocket tracker 的实时布林带状态（免 REST 轮询）。
+// 任一 interval 数据未就绪（boll 未加载 / 尚无真实成交）则返回 ok=false，调用方回退 REST。
+func (m *Monitor) liveIntervals(symbol string, intervals []string) ([]IntervalResult, bool) {
+	if m.ws == nil {
+		return nil, false
+	}
+	m.ws.mu.RLock()
+	defer m.ws.mu.RUnlock()
+	pt := m.ws.trackers[symbol]
+	if pt == nil {
+		return nil, false
+	}
+	results := make([]IntervalResult, 0, len(intervals))
+	for _, iv := range intervals {
+		it := pt.intervals[iv]
+		if it == nil || it.boll == nil || it.close <= 0 || it.high <= 0 || it.low <= 0 {
+			return nil, false
+		}
+		b := *it.boll
+		b.High = it.high
+		b.Low = it.low
+		b.Close = it.close
+		results = append(results, IntervalResult{Interval: it.interval, Boll: &b, BreakType: b.Break()})
+	}
+	return results, true
+}
+
 // CheckNow 立即执行一次检查并返回格式化结果
 func (m *Monitor) CheckNow() string {
 	var sb strings.Builder
 	for _, sym := range m.cfg.BollMonitorSymbols {
 		syn := resolveSynthetic(m.cfg.SyntheticPairs, sym.Symbol)
 
-		results := m.checkSymbol(sym.Symbol, sym.Intervals)
+		// WS 实时值优先（与实时提醒同源，零 REST 开销），数据未就绪时回退 REST 全量检查
+		results, fromWS := m.liveIntervals(sym.Symbol, sym.Intervals)
+		if !fromWS {
+			results = m.checkSymbol(sym.Symbol, sym.Intervals)
+		}
 
 		precision := m.pricePrecision(sym.Symbol)
 		if syn.synthetic {
