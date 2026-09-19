@@ -90,11 +90,24 @@ func (n *Notifier) sendMessage(text string) error {
 }
 
 // SendTradeReport 发送定投交易报告
-func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult, poolInfos []PoolInfo) {
+func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult, poolInfos []PoolInfo, transferResults []*binance.UniversalTransferResult) {
 	var sb strings.Builder
 
 	sb.WriteString("🤖 <b>币安自动定投报告</b>\n")
 	sb.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	// 跨账户划转信息
+	if len(transferResults) > 0 {
+		sb.WriteString("🔄 <b>跨账户划转:</b>\n")
+		for _, r := range transferResults {
+			if r.Error != nil {
+				sb.WriteString(fmt.Sprintf("   ❌ %s — %s\n", r.Source, html.EscapeString(r.Error.Error())))
+			} else {
+				sb.WriteString(fmt.Sprintf("   ✅ %s → 现货: %.2f USDT\n", r.Source, r.Amount))
+			}
+		}
+		sb.WriteString("\n")
+	}
 
 	// 理财赎回信息
 	if len(redeemResults) > 0 {

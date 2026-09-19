@@ -32,17 +32,18 @@ type Config struct {
 	TelegramChatID   string
 
 	// 可选
-	UseDemo        bool   // 使用 demo.binance.com 模拟交易
-	BinanceBaseURL string // 自定义 API 地址，最高优先级
-	DCAEnabled     bool   // 是否启用定投
-	AutoEarn       bool   // 自动与活期理财互转
-	LogLevel       string
+	UseDemo             bool     // 使用 demo.binance.com 模拟交易
+	BinanceBaseURL      string   // 自定义 API 地址，最高优先级
+	DCAEnabled          bool     // 是否启用定投
+	AutoEarn            bool     // 自动与活期理财互转
+	AutoTransferSources []string // 现货 USDT 不足时的跨账户划转顺序 (funding/umfuture/margin)
+	LogLevel            string
 
 	// 布林带价格监控
-	BollMonitorEnabled       bool
-	BollMonitorSymbols       []BollMonitorSymbolConfig // 监控的交易对及其 K 线级别
-	BollMonitorPeriod int     // 布林带周期，默认 20
-	BollMonitorStdDev float64 // 布林带标准差倍数，默认 2.0
+	BollMonitorEnabled bool
+	BollMonitorSymbols []BollMonitorSymbolConfig // 监控的交易对及其 K 线级别
+	BollMonitorPeriod  int                       // 布林带周期，默认 20
+	BollMonitorStdDev  float64                   // 布林带标准差倍数，默认 2.0
 
 	// 自定义合成交易对
 	SyntheticPairs map[string]string // 合成交易对名 → 分子/分母表达式，如 XAUXAG → XAUUSDT/XAGUSDT
@@ -145,6 +146,22 @@ func Load() (*Config, error) {
 	}
 	cfg.AutoEarn = strings.ToLower(os.Getenv("AUTO_EARN")) == "true"
 
+	// 跨账户划转顺序 (逗号分隔，如 funding,umfuture,margin)
+	if v := strings.TrimSpace(os.Getenv("AUTO_TRANSFER_SOURCES")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.ToLower(strings.TrimSpace(part))
+			if part == "" {
+				continue
+			}
+			switch part {
+			case "funding", "umfuture", "margin":
+				cfg.AutoTransferSources = append(cfg.AutoTransferSources, part)
+			default:
+				return nil, fmt.Errorf("AUTO_TRANSFER_SOURCES 包含无效来源 %q (支持: funding, umfuture, margin)", part)
+			}
+		}
+	}
+
 	cfg.LogLevel = os.Getenv("LOG_LEVEL")
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
@@ -190,6 +207,9 @@ func Load() (*Config, error) {
 	}
 
 	// 配置冲突检查
+	if len(cfg.AutoTransferSources) > 0 && cfg.UseDemo {
+		return nil, fmt.Errorf("AUTO_TRANSFER_SOURCES 不能与 USE_DEMO 同时启用（模拟环境不支持划转 API）")
+	}
 	if cfg.AutoEarn && cfg.UseDemo {
 		return nil, fmt.Errorf("AUTO_EARN 不能与 USE_DEMO 同时启用（模拟环境不支持理财 API）")
 	}

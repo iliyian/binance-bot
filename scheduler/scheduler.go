@@ -160,6 +160,18 @@ func (s *Scheduler) executeTrades() {
 	}
 	s.poolMu.Unlock()
 
+	// 现货 USDT 不足时按配置顺序从其他账户划转（统一账户模式下自动跳过）
+	var transferResults []*binance.UniversalTransferResult
+	if len(s.cfg.AutoTransferSources) > 0 {
+		var sources []binance.TransferSource
+		for _, name := range s.cfg.AutoTransferSources {
+			if src := s.client.TransferSourceByName(name); src != nil {
+				sources = append(sources, *src)
+			}
+		}
+		transferResults = s.client.AutoTransferIfNeeded(ctx, s.cfg.TradePairs, effectiveAmounts, sources)
+	}
+
 	// 如果开启了自动理财互转，先检查余额并赎回（使用 pool 叠加后的有效金额）
 	var redeemResults []*binance.EarnTransferResult
 	if s.cfg.AutoEarn {
@@ -211,7 +223,7 @@ func (s *Scheduler) executeTrades() {
 
 	// 发送 Telegram 通知
 	if s.notifier != nil {
-		s.notifier.SendTradeReport(results, balance, redeemResults, purchaseResults, poolInfos)
+		s.notifier.SendTradeReport(results, balance, redeemResults, purchaseResults, poolInfos, transferResults)
 	}
 
 	// 打印下次执行时间

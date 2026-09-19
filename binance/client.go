@@ -7,9 +7,11 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	gobinance "github.com/adshao/go-binance/v2"
+	gobinancefutures "github.com/adshao/go-binance/v2/futures"
 )
 
 const (
@@ -37,6 +39,10 @@ type Client struct {
 	apiKey    string
 	secretKey string
 	debug     bool
+
+	// USDT 合约客户端 (惰性初始化，用于查询合约余额)
+	futuresOnce sync.Once
+	futuresCli  *gobinancefutures.Client
 }
 
 // SetDebug 设置调试模式

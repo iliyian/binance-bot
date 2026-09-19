@@ -110,6 +110,8 @@ go build -o binance-bot .
 | `TELEGRAM_BOT_TOKEN` | ❌ | Telegram Bot Token | `123456:ABC...` |
 | `TELEGRAM_CHAT_ID` | ❌ | Telegram Chat ID | `-100123456` |
 | `LOG_LEVEL` | ❌ | 日志级别 | `info` |
+| `AUTO_EARN` | ❌ | 自动活期理财互转 | `true` |
+| `AUTO_TRANSFER_SOURCES` | ❌ | 现货 USDT 不足时的跨账户划转顺序，逗号分隔 | `funding,umfuture,margin` |
 
 ### Cron 表达式示例
 
@@ -177,6 +179,20 @@ sudo systemctl status binance-bot    # 查看状态
 sudo systemctl restart binance-bot   # 重启
 sudo journalctl -u binance-bot -f    # 查看日志
 ```
+
+## 🔄 跨账户自动划转
+
+现货账户 USDT 余额不足以完成本次定投时，机器人会按 `AUTO_TRANSFER_SOURCES` 配置的顺序依次从其他账户划转补足（仅划差额，不多转）：
+
+| 来源 | 说明 |
+|------|------|
+| `funding` | 资金账户 |
+| `umfuture` | USDT 永续合约账户 |
+| `margin` | 全仓杠杆账户 |
+
+示例：`AUTO_TRANSFER_SOURCES=funding,umfuture,margin` 表示先从资金账户划，不够再从合约账户划，最后从杠杆账户划。
+
+**统一账户模式**：若账户已开启统一账户（Portfolio Margin / 统一账户计划，API 判定字段 `portiAble` / `isPortfolioMarginRetailEnabled`），各账户资产共享、现货可直接使用，机器人会自动检测并跳过划转。
 
 ## 🏊 Pool 差额累积
 
