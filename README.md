@@ -25,6 +25,10 @@ binance-bot/
 │   └── config.go           # 配置加载
 ├── binance/
 │   └── client.go           # 币安 API 交易客户端
+├── monitor/
+│   ├── ws.go               # WebSocket 实时监控 / 布林带突破检测
+│   ├── kline.go            # K 线与合成交易对（比值）计算
+│   └── precision.go        # 价格显示精度（tickSize + 波动推导）
 ├── telegram/
 │   └── notify.go           # Telegram 通知
 ├── scheduler/
@@ -112,6 +116,15 @@ go build -o binance-bot .
 | `LOG_LEVEL` | ❌ | 日志级别 | `info` |
 | `AUTO_EARN` | ❌ | 自动活期理财互转 | `true` |
 | `AUTO_TRANSFER_SOURCES` | ❌ | 现货 USDT 不足时的跨账户划转顺序，逗号分隔 | `funding,umfuture,margin` |
+| `BOLL_MONITOR_ENABLED` | ❌ | 启用布林带突破监控 | `true` |
+| `BOLL_MONITOR_SYMBOLS` | ❌ | 监控交易对及 K 线级别 | `BTCUSDT:1h&4h,ETHBTC:15m&1h` |
+| `BOLL_MONITOR_INTERVALS` | ❌ | 全局默认 K 线级别 | `1h&4h` |
+| `BOLL_MONITOR_PERIOD` | ❌ | 布林带周期（默认 20） | `20` |
+| `BOLL_MONITOR_STDDEV` | ❌ | 布林带标准差倍数（默认 2.0） | `2` |
+| `SYNTHETIC_PAIRS` | ❌ | 自定义合成交易对（两条腿比值） | `ETHBTC:ETHUSDC/BTCUSDC` |
+| `PRECISION_VOL_ENABLED` | ❌ | 启用基于历史波动的显示精度（默认 `true`） | `true` |
+| `PRECISION_VOL_K` | ❌ | 最小分度值 = K × ATR（默认 0.1） | `0.1` |
+| `PRECISION_VOL_WINDOW` | ❌ | ATR 采样窗口（根 K 线，默认 100） | `100` |
 
 ### Cron 表达式示例
 
@@ -126,6 +139,33 @@ go build -o binance-bot .
 | `0 30 8 * * 1-5` | 工作日 08:30 |
 | `0 0 */4 * * *` | 每 4 小时 |
 | `0 0 0 1 * *` | 每月 1 日 00:00 |
+
+## 🎯 布林带监控与合成交易对精度
+
+### 合成交易对
+
+`SYNTHETIC_PAIRS` 可把两条真实合约的比值当成一个「虚拟交易对」监控，例如：
+
+```
+SYNTHETIC_PAIRS=ETHBTC:ETHUSDC/BTCUSDC
+BOLL_MONITOR_SYMBOLS=ETHBTC:15m&1h
+```
+
+WebSocket 会实时用 `ETHUSDC / BTCUSDC` 计算比值，再对其做布林带突破检测（复用两条腿的行情流，零额外订阅）。
+
+### 显示精度如何计算
+
+价格小数位不是写死的，最终精度取以下两者的**较大值**（越细越安全）：
+
+1. **数据粒度下界**（两条腿 tick 传播得到的最小可分辨变动）
+   对合成对 `R = N/D`，两条腿各跳一个 tick 引起的比值变化为
+   `ΔR = R · (tick_N/N + tick_D/D)`，则所需位数 `dp = ⌈-log10(ΔR)⌉`。
+   例：ETHUSDC=2690.46(tick 0.01)、BTCUSDC=83557.1(tick 0.1) → ΔR≈1.58e-7 → **7 位**。
+2. **历史波动下界**（启动时用基础 K 线预计算）
+   `ATR ≈ mean(High − Low)`，`dp = ⌈-log10(K · ATR)⌉`，K 默认 0.1（1/10 法则）。
+
+多个 K 线级别取最细者，上限 12 位。这样既不会比数据本身还粗（把真实 tick 波动吞掉），也不会输出虚假的多余位数。
+真实交易对同样适用：以 `PRICE_FILTER.tickSize` 为下界，与波动项取 max。
 
 ## 📱 Telegram 通知设置
 

@@ -48,7 +48,7 @@ func (m *Monitor) Start() {
 		log.Printf("⚠️ 获取币种价格精度失败，改用默认小数位: %v", err)
 	}
 
-	m.ws = NewWSClient(m.cfg, m.notifier, m.client)
+	m.ws = NewWSClient(m.cfg, m.notifier, m.client, m.pricePrecisions)
 	if err := m.ws.Start(); err != nil {
 		log.Fatalf("❌ WebSocket 启动失败: %v", err)
 	}
@@ -204,8 +204,19 @@ func (m *Monitor) CheckNow() string {
 		}
 
 		precision := m.pricePrecision(sym.Symbol)
-		if syn.synthetic {
-			precision = 4
+		numP, denP := 0.0, 0.0
+		if syn.synthetic && m.ws != nil {
+			if v, ok := m.ws.LatestPrice(syn.num); ok {
+				numP = v
+			}
+			if v, ok := m.ws.LatestPrice(syn.den); ok {
+				denP = v
+			}
+		}
+		if m.ws != nil {
+			precision = m.ws.PairPricePrecision(sym.Symbol, numP, denP)
+		} else if syn.synthetic {
+			precision = syntheticPrecisionDefault
 		}
 		format := func(v float64) string {
 			return strconv.FormatFloat(v, 'f', precision, 64)
@@ -218,8 +229,9 @@ func (m *Monitor) CheckNow() string {
 		if syn.synthetic && m.ws != nil {
 			if numP, numOk := m.ws.LatestPrice(syn.num); numOk {
 				if denP, denOk := m.ws.LatestPrice(syn.den); denOk {
-					sb.WriteString(fmt.Sprintf("\n   └ %s: <code>%.4f</code>  %s: <code>%.4f</code>",
-						syn.num, numP, syn.den, denP))
+					sb.WriteString(fmt.Sprintf("\n   └ %s: <code>%s</code>  %s: <code>%s</code>",
+						syn.num, m.formatPrice(syn.num, numP),
+						syn.den, m.formatPrice(syn.den, denP)))
 				}
 			}
 		}

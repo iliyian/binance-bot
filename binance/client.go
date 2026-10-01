@@ -29,7 +29,7 @@ type TradeResult struct {
 	Commission      string // 总手续费
 	CommissionAsset string // 手续费资产类型
 	Status          string
-	TransactTime      time.Time
+	TransactTime    time.Time
 	Error           error
 }
 
@@ -107,7 +107,7 @@ func (c *Client) SyncServerTime() error {
 // quoteAmount: 使用的报价货币金额 (如 10 表示 10 USDT)
 func (c *Client) ExecuteMarketBuy(ctx context.Context, symbol, quoteAmount string) *TradeResult {
 	result := &TradeResult{
-		Symbol:     symbol,
+		Symbol:       symbol,
 		TransactTime: time.Now(),
 	}
 

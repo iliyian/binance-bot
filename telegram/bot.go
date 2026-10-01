@@ -47,7 +47,7 @@ type Bot struct {
 
 // TelegramUpdate Telegram 更新结构
 type TelegramUpdate struct {
-	UpdateID int             `json:"update_id"`
+	UpdateID int              `json:"update_id"`
 	Message  *TelegramMessage `json:"message"`
 }
 

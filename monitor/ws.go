@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -125,6 +126,14 @@ type WSClient struct {
 	streamIndex map[string][]*streamBinding // raw symbol → bindings
 	latest      map[string]float64
 
+	// 单腿（真实）交易对的显示精度（来自 exchangeInfo PRICE_FILTER.tickSize），
+	// 用于合成交易对推导比值精度，以及格式化底层腿的价格。
+	pricePrecisions map[string]int
+
+	// 交易对 → 基于历史波动预计算的显示精度（启动时用基础 K 线的 ATR 推导）。
+	volMu         sync.RWMutex
+	volPrecisions map[string]int
+
 	conn     *websocket.Conn
 	connDone chan struct{}
 	stopCh   chan struct{}
@@ -133,16 +142,89 @@ type WSClient struct {
 	everConnected bool // 是否成功连上过（区分首连与重连）
 }
 
-func NewWSClient(cfg *config.Config, notifier *telegram.Notifier, httpClient *http.Client) *WSClient {
-	return &WSClient{
-		cfg:      cfg,
-		notifier: notifier,
-		httpDoer: httpClient,
-		trackers: make(map[string]*pairTracker),
-		latest:   make(map[string]float64),
-		stopCh:   make(chan struct{}),
-		doneCh:   make(chan struct{}),
+func NewWSClient(cfg *config.Config, notifier *telegram.Notifier, httpClient *http.Client, pricePrecisions map[string]int) *WSClient {
+	if pricePrecisions == nil {
+		pricePrecisions = make(map[string]int)
 	}
+	return &WSClient{
+		cfg:             cfg,
+		notifier:        notifier,
+		httpDoer:        httpClient,
+		pricePrecisions: pricePrecisions,
+		volPrecisions:   make(map[string]int),
+		trackers:        make(map[string]*pairTracker),
+		latest:          make(map[string]float64),
+		stopCh:          make(chan struct{}),
+		doneCh:          make(chan struct{}),
+	}
+}
+
+// precisionFor 返回真实交易对的显示小数位，未知时回退默认值。
+func (w *WSClient) precisionFor(symbol string) int {
+	if p, ok := w.pricePrecisions[symbol]; ok {
+		return p
+	}
+	return defaultPricePrecision
+}
+
+// syntheticPrecision 返回合成交易对比值的显示小数位（按两条腿 tick 推算）。
+func (w *WSClient) syntheticPrecision(numSymbol, denSymbol string, numPrice, denPrice float64) int {
+	return syntheticPricePrecision(numPrice, denPrice,
+		w.precisionFor(numSymbol), w.precisionFor(denSymbol))
+}
+
+// PairPricePrecision 返回交易对的最终显示精度，取两者较大（越细越安全）：
+//   - 数据粒度下界：合成对按两条腿 tick 传播推算；真实对用 tickSize 对应位数。
+//   - 历史波动下界：启动时按基础 K 线 ATR 预计算，最小分度值 = K * ATR。
+func (w *WSClient) PairPricePrecision(pairSymbol string, numPrice, denPrice float64) int {
+	p := w.precisionFor(pairSymbol)
+	if syn := resolveSynthetic(w.cfg.SyntheticPairs, pairSymbol); syn.synthetic {
+		p = w.syntheticPrecision(syn.num, syn.den, numPrice, denPrice)
+	}
+	if v := w.volPrecision(pairSymbol); v > p {
+		p = v
+	}
+	return p
+}
+
+// atrPrecision 依据历史 K 线的平均真实波幅（ATR 近似：mean(High-Low)）推导
+// 显示小数位：最小分度值 10^-dp 应不大于 K * ATR（1/10 法则，K 默认 0.1）。
+func atrPrecision(klines []Kline, k float64) int {
+	if len(klines) == 0 || k <= 0 {
+		return 0
+	}
+	var sum float64
+	for _, kl := range klines {
+		if kl.High > kl.Low {
+			sum += kl.High - kl.Low
+		}
+	}
+	atr := sum / float64(len(klines))
+	if atr <= 0 {
+		return 0
+	}
+	dp := int(math.Ceil(-math.Log10(k * atr)))
+	if dp < 0 {
+		dp = 0
+	}
+	if dp > syntheticPrecisionMax {
+		dp = syntheticPrecisionMax
+	}
+	return dp
+}
+
+func (w *WSClient) recordVolPrecision(symbol string, dp int) {
+	w.volMu.Lock()
+	defer w.volMu.Unlock()
+	if dp > w.volPrecisions[symbol] {
+		w.volPrecisions[symbol] = dp
+	}
+}
+
+func (w *WSClient) volPrecision(symbol string) int {
+	w.volMu.RLock()
+	defer w.volMu.RUnlock()
+	return w.volPrecisions[symbol]
 }
 
 func (w *WSClient) Start() error {
@@ -245,6 +327,9 @@ func (w *WSClient) loadBollBaseline(it *intervalTracker, symbol, interval string
 	defer cancel()
 
 	limit := it.period + 1
+	if w.cfg.PrecisionVolEnabled && w.cfg.PrecisionVolWindow > limit {
+		limit = w.cfg.PrecisionVolWindow
+	}
 	var klines []Kline
 	var err error
 
@@ -273,6 +358,13 @@ func (w *WSClient) loadBollBaseline(it *intervalTracker, symbol, interval string
 	if len(closes) >= it.period {
 		it.closes = closes[len(closes)-it.period:]
 		it.boll = CalcBoll(it.closes, it.period, it.stddev)
+	}
+
+	// 基于历史波动预计算显示精度（多 interval 取最细者）
+	if w.cfg.PrecisionVolEnabled {
+		if dp := atrPrecision(klines, w.cfg.PrecisionVolK); dp > 0 {
+			w.recordVolPrecision(symbol, dp)
+		}
 	}
 
 	return nil
@@ -539,10 +631,7 @@ func (w *WSClient) evaluateBinding(sb *streamBinding, numPrice, denPrice float64
 	}
 	pt.lastCheckMs = nowMs
 
-	precision := defaultPricePrecision
-	if sb.synthetic {
-		precision = 4
-	}
+	precision := w.PairPricePrecision(sb.pairSymbol, numPrice, denPrice)
 
 	allBreak := true
 	var dir BreakType
@@ -576,17 +665,19 @@ func (w *WSClient) evaluateBinding(sb *streamBinding, numPrice, denPrice float64
 
 		closePrice = it.close
 		details = append(details, telegram.BollAlertDetail{
-			Interval:  it.interval,
-			High:      it.high,
-			Low:       it.low,
-			Upper:     it.boll.Upper,
-			Middle:    it.boll.Middle,
-			Lower:     it.boll.Lower,
-			Synthetic: sb.synthetic,
-			NumSymbol: sb.numSymbol,
-			DenSymbol: sb.denSymbol,
-			NumPrice:  numPrice,
-			DenPrice:  denPrice,
+			Interval:     it.interval,
+			High:         it.high,
+			Low:          it.low,
+			Upper:        it.boll.Upper,
+			Middle:       it.boll.Middle,
+			Lower:        it.boll.Lower,
+			Synthetic:    sb.synthetic,
+			NumSymbol:    sb.numSymbol,
+			DenSymbol:    sb.denSymbol,
+			NumPrice:     numPrice,
+			DenPrice:     denPrice,
+			NumPrecision: w.precisionFor(sb.numSymbol),
+			DenPrecision: w.precisionFor(sb.denSymbol),
 		})
 	}
 
@@ -612,11 +703,11 @@ func (w *WSClient) sendWSAlert(a pendingAlert) {
 	}
 	d0 := a.details[0]
 	if d0.Synthetic {
-		log.Printf("🔔 %s(%s/%s) 全部 K 线级别%s！比值=%.*f %s=%.4f %s=%.4f",
+		log.Printf("🔔 %s(%s/%s) 全部 K 线级别%s！比值=%.*f %s=%.*f %s=%.*f",
 			a.symbol, d0.NumSymbol, d0.DenSymbol, breakTypeName(a.bt),
 			a.precision, a.close,
-			d0.NumSymbol, d0.NumPrice,
-			d0.DenSymbol, d0.DenPrice)
+			d0.NumSymbol, d0.NumPrecision, d0.NumPrice,
+			d0.DenSymbol, d0.DenPrecision, d0.DenPrice)
 	} else {
 		log.Printf("🔔 %s 全部 K 线级别%s！价格=%.*f",
 			a.symbol, breakTypeName(a.bt), a.precision, a.close)

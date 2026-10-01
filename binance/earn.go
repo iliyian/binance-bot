@@ -27,15 +27,15 @@ type EarnTransferResult struct {
 
 // SimpleEarnPosition Simple Earn 活期持仓
 type SimpleEarnPosition struct {
-	ProductId                string `json:"productId"`
-	Asset                    string `json:"asset"`
-	TotalAmount              string `json:"totalAmount"`
-	FreeAmount               string `json:"freeAmount"`
-	CollateralAmount         string `json:"collateralAmount"`
-	CanRedeem                bool   `json:"canRedeem"`
+	ProductId                  string `json:"productId"`
+	Asset                      string `json:"asset"`
+	TotalAmount                string `json:"totalAmount"`
+	FreeAmount                 string `json:"freeAmount"`
+	CollateralAmount           string `json:"collateralAmount"`
+	CanRedeem                  bool   `json:"canRedeem"`
 	LatestAnnualPercentageRate string `json:"latestAnnualPercentageRate"`
-	CumulativeTotalRewards   string `json:"cumulativeTotalRewards"`
-	AutoSubscribe            bool   `json:"autoSubscribe"`
+	CumulativeTotalRewards     string `json:"cumulativeTotalRewards"`
+	AutoSubscribe              bool   `json:"autoSubscribe"`
 }
 
 // GetRedeemableAmount 获取可赎回金额（优先 freeAmount，否则 totalAmount - collateralAmount）
@@ -64,10 +64,10 @@ type SimpleEarnPositionResponse struct {
 
 // SimpleEarnProduct Simple Earn 活期产品
 type SimpleEarnProduct struct {
-	ProductId  string `json:"productId"`
-	Asset      string `json:"asset"`
-	Status     string `json:"status"`
-	CanRedeem  bool   `json:"canRedeem"`
+	ProductId         string `json:"productId"`
+	Asset             string `json:"asset"`
+	Status            string `json:"status"`
+	CanRedeem         bool   `json:"canRedeem"`
 	MinPurchaseAmount string `json:"minPurchaseAmount"`
 }
 

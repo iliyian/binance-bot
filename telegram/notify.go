@@ -33,11 +33,13 @@ type BollAlertDetail struct {
 	Lower    float64
 
 	// 合成交易对底层价格 (仅合成交易对使用)
-	Synthetic bool
-	NumSymbol string
-	DenSymbol string
-	NumPrice  float64
-	DenPrice  float64
+	Synthetic    bool
+	NumSymbol    string
+	DenSymbol    string
+	NumPrice     float64
+	DenPrice     float64
+	NumPrecision int // 底层腿各自的价格精度（来自 exchangeInfo tickSize）
+	DenPrecision int
 }
 
 // Notifier Telegram 通知器
@@ -283,8 +285,9 @@ func (n *Notifier) SendBollAlert(symbol string, currentPrice float64, direction 
 	if len(details) > 0 && details[0].Synthetic {
 		// 合成交易对同时显示底层价格
 		d0 := details[0]
-		sb.WriteString(fmt.Sprintf("   └ %s: <code>%.4f</code>  %s: <code>%.4f</code>\n",
-			d0.NumSymbol, d0.NumPrice, d0.DenSymbol, d0.DenPrice))
+		sb.WriteString(fmt.Sprintf("   └ %s: <code>%.*f</code>  %s: <code>%.*f</code>\n",
+			d0.NumSymbol, d0.NumPrecision, d0.NumPrice,
+			d0.DenSymbol, d0.DenPrecision, d0.DenPrice))
 	}
 
 	sb.WriteString(fmt.Sprintf("%s %s\n\n", icon, direction))

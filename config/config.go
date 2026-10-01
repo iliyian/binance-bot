@@ -47,6 +47,11 @@ type Config struct {
 
 	// 自定义合成交易对
 	SyntheticPairs map[string]string // 合成交易对名 → 分子/分母表达式，如 XAUXAG → XAUUSDT/XAGUSDT
+
+	// 显示精度：基于历史波动预计算（最小分度值 = PrecisionVolK * ATR）
+	PrecisionVolEnabled bool    // 是否启用波动率精度项，默认 true
+	PrecisionVolK       float64 // ATR 系数，默认 0.1（1/10 法则）
+	PrecisionVolWindow  int     // ATR 采样窗口（根 K 线），默认 100
 }
 
 // BollMonitorSymbolConfig 单个监控交易对配置
@@ -268,6 +273,28 @@ func Load() (*Config, error) {
 			cfg.BollMonitorStdDev = f
 		}
 
+	}
+
+	// 显示精度（基于历史波动预计算）
+	cfg.PrecisionVolEnabled = true
+	if v := os.Getenv("PRECISION_VOL_ENABLED"); v != "" {
+		cfg.PrecisionVolEnabled = strings.ToLower(strings.TrimSpace(v)) != "false"
+	}
+	cfg.PrecisionVolK = 0.1
+	if v := os.Getenv("PRECISION_VOL_K"); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f <= 0 {
+			return nil, fmt.Errorf("PRECISION_VOL_K 无效: %s", v)
+		}
+		cfg.PrecisionVolK = f
+	}
+	cfg.PrecisionVolWindow = 100
+	if v := os.Getenv("PRECISION_VOL_WINDOW"); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 10 {
+			return nil, fmt.Errorf("PRECISION_VOL_WINDOW 无效: %s (需 >= 10)", v)
+		}
+		cfg.PrecisionVolWindow = n
 	}
 
 	return cfg, nil
