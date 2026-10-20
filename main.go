@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/iliyian/binance-bot/binance"
@@ -96,13 +98,36 @@ func main() {
 		})
 	}
 
-	// 创建价格监控
+	// 创建价格监控（即使未启用也创建，方便通过 Telegram 动态添加交易对）
 	var mon *monitor.Monitor
-	if cfg.BollMonitorEnabled {
+	if cfg.BollMonitorEnabled || bot != nil {
 		mon = monitor.New(cfg, notifier)
 		if bot != nil {
 			bot.SetMonitorStatusGetter(mon.GetStatus)
 			bot.SetMonitorCheckNow(mon.CheckNow)
+			bot.SetMonitorSymbols(mon.GetSymbolSpecs, func(specs []string) error {
+				syms, err := config.ParseBollMonitorSymbols(strings.Join(specs, ","), os.Getenv("BOLL_MONITOR_INTERVALS"))
+				if err != nil {
+					return err
+				}
+				if len(syms) == 0 {
+					return fmt.Errorf("至少保留一个监控交易对")
+				}
+				if err := mon.Reload(syms); err != nil {
+					return err
+				}
+				if err := config.UpdateEnvKey("BOLL_MONITOR_SYMBOLS", config.FormatBollMonitorSymbols(syms)); err != nil {
+					return fmt.Errorf("监控已热更新，但写入 .env 失败: %w", err)
+				}
+				if !cfg.BollMonitorEnabled {
+					cfg.BollMonitorEnabled = true
+					if err := config.UpdateEnvKey("BOLL_MONITOR_ENABLED", "true"); err != nil {
+						log.Printf("⚠️ 写入 BOLL_MONITOR_ENABLED 失败: %v", err)
+					}
+				}
+				log.Printf("💾 监控交易对已写入 .env: %s", config.FormatBollMonitorSymbols(syms))
+				return nil
+			})
 		}
 		log.Println("📡 价格监控已配置")
 	}
@@ -130,8 +155,10 @@ func main() {
 	}
 
 	// 启动价格监控
-	if mon != nil {
-		mon.Start()
+	if mon != nil && cfg.BollMonitorEnabled {
+		if err := mon.Start(); err != nil {
+			log.Printf("❌ 价格监控启动失败: %v", err)
+		}
 	}
 
 	// 发送启动通知

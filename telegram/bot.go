@@ -43,21 +43,36 @@ type Bot struct {
 	envUpdater    EnvUpdater
 	monitorGetter MonitorStatusGetter
 	monitorCheck  MonitorCheckNow
+
+	// 监控交易对的读取/写入回调（写入方负责校验、热更新和同步 .env）
+	monitorSymbolsGetter func() []string
+	monitorSymbolsSetter func([]string) error
+	pendingAdd           map[int64]bool
 }
 
 // TelegramUpdate Telegram 更新结构
 type TelegramUpdate struct {
-	UpdateID int              `json:"update_id"`
-	Message  *TelegramMessage `json:"message"`
+	UpdateID      int              `json:"update_id"`
+	Message       *TelegramMessage `json:"message"`
+	CallbackQuery *CallbackQuery   `json:"callback_query"`
+}
+
+// CallbackQuery 内联按钮回调
+type CallbackQuery struct {
+	ID      string           `json:"id"`
+	From    *TelegramUser    `json:"from"`
+	Message *TelegramMessage `json:"message"`
+	Data    string           `json:"data"`
 }
 
 // TelegramMessage Telegram 消息结构
 type TelegramMessage struct {
-	MessageID int             `json:"message_id"`
-	From      *TelegramUser   `json:"from"`
-	Chat      *TelegramChat   `json:"chat"`
-	Text      string          `json:"text"`
-	Entities  []MessageEntity `json:"entities"`
+	MessageID      int              `json:"message_id"`
+	From           *TelegramUser    `json:"from"`
+	Chat           *TelegramChat    `json:"chat"`
+	Text           string           `json:"text"`
+	Entities       []MessageEntity  `json:"entities"`
+	ReplyToMessage *TelegramMessage `json:"reply_to_message"`
 }
 
 // TelegramUser Telegram 用户
@@ -100,7 +115,8 @@ func NewBot(botToken, chatID string, binanceClient *binance.Client) *Bot {
 		client: &http.Client{
 			Timeout: 60 * time.Second, // 长轮询超时
 		},
-		binance: binanceClient,
+		binance:    binanceClient,
+		pendingAdd: make(map[int64]bool),
 	}
 }
 
@@ -127,6 +143,12 @@ func (b *Bot) SetMonitorStatusGetter(getter MonitorStatusGetter) {
 // SetMonitorCheckNow 设置立即执行监控检查的回调
 func (b *Bot) SetMonitorCheckNow(checker MonitorCheckNow) {
 	b.monitorCheck = checker
+}
+
+// SetMonitorSymbols 设置监控交易对的读取与写入回调
+func (b *Bot) SetMonitorSymbols(getter func() []string, setter func([]string) error) {
+	b.monitorSymbolsGetter = getter
+	b.monitorSymbolsSetter = setter
 }
 
 // Start 启动 Bot 长轮询
@@ -222,7 +244,7 @@ func (b *Bot) pollUpdates(ctx context.Context) {
 
 // getUpdates 获取更新
 func (b *Bot) getUpdates(offset, timeout int) ([]TelegramUpdate, error) {
-	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=%d&allowed_updates=[\"message\"]",
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/getUpdates?offset=%d&timeout=%d&allowed_updates=[\"message\",\"callback_query\"]",
 		b.botToken, offset, timeout)
 
 	resp, err := b.client.Get(url)
@@ -250,6 +272,10 @@ func (b *Bot) getUpdates(offset, timeout int) ([]TelegramUpdate, error) {
 
 // handleUpdate 处理更新
 func (b *Bot) handleUpdate(update TelegramUpdate) {
+	if update.CallbackQuery != nil {
+		b.handleCallbackQuery(update.CallbackQuery)
+		return
+	}
 	if update.Message == nil {
 		return
 	}
@@ -263,8 +289,12 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 		return
 	}
 
-	// 检查是否是命令
+	// 非命令文本：如果处于「添加监控交易对」的等待状态，则当作输入处理
 	if !strings.HasPrefix(msg.Text, "/") {
+		if b.pendingAdd[msg.Chat.ID] {
+			delete(b.pendingAdd, msg.Chat.ID)
+			b.handlePendingAdd(msg.Text)
+		}
 		return
 	}
 
@@ -289,7 +319,7 @@ func (b *Bot) handleUpdate(update TelegramUpdate) {
 	case "/setpool":
 		b.handleSetPool(args)
 	case "/monitor":
-		b.handleMonitor()
+		b.handleMonitor(args)
 	case "/help", "/start":
 		b.handleHelp()
 	default:
@@ -604,13 +634,83 @@ func (b *Bot) handleHelp() {
   例: <code>/setpool BTCUSDT 0.5</code>
   例: <code>/setpool BTCUSDT 0.5 ETHUSDT 0.3</code>
 /monitor — 查询价格监控状态
+/monitor menu — 打开交易对设置菜单（增删/修改）
 /help — 显示此帮助信息`
 
 	b.sendReply(text)
 }
 
+// inlineButton 内联键盘按钮
+type inlineButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data,omitempty"`
+}
+
 // handleMonitor 处理 /monitor 命令
-func (b *Bot) handleMonitor() {
+//
+//	/monitor                 查看状态 + 内联按钮
+//	/monitor add BTCUSDT:1h&4h
+//	/monitor del BTCUSDT
+//	/monitor set BTCUSDT:1h&4h,ETHUSDT:15m
+//	/monitor cancel
+func (b *Bot) handleMonitor(args []string) {
+	if b.monitorSymbolsGetter == nil || b.monitorSymbolsSetter == nil {
+		b.sendReply("⚠️ 价格监控未启用或未配置")
+		return
+	}
+
+	if len(args) == 0 {
+		// 纯 /monitor 保持原有行为：状态 + 立即检查
+		b.sendMonitorStatus()
+		return
+	}
+
+	switch strings.ToLower(args[0]) {
+	case "menu", "edit", "config":
+		b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+	case "add":
+		if len(args) < 2 {
+			b.promptAddSymbol()
+			return
+		}
+		if err := b.addMonitorSpecs(splitSpecList(strings.Join(args[1:], " "))); err != nil {
+			b.sendReply("❌ " + html.EscapeString(err.Error()))
+			return
+		}
+		b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+	case "del", "delete", "remove", "rm":
+		if len(args) < 2 {
+			b.sendReply("用法: <code>/monitor del BTCUSDT</code>")
+			return
+		}
+		if err := b.removeMonitorSpecs(args[1:]); err != nil {
+			b.sendReply("❌ " + html.EscapeString(err.Error()))
+			return
+		}
+		b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+	case "set":
+		if len(args) < 2 {
+			b.sendReply("用法: <code>/monitor set BTCUSDT:1h&4h,ETHUSDT:15m</code>")
+			return
+		}
+		if err := b.monitorSymbolsSetter(splitSpecList(strings.Join(args[1:], " "))); err != nil {
+			b.sendReply("❌ " + html.EscapeString(err.Error()))
+			return
+		}
+		b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+	case "list":
+		b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+	case "cancel":
+		chatIDInt, _ := strconv.ParseInt(b.chatID, 10, 64)
+		delete(b.pendingAdd, chatIDInt)
+		b.sendReply("已取消添加")
+	default:
+		b.sendReply("用法: <code>/monitor</code> 打开菜单，或 <code>/monitor add BTCUSDT:1h&amp;4h</code>")
+	}
+}
+
+// sendMonitorStatus 保持原有 /monitor 行为：状态 + 立即检查结果
+func (b *Bot) sendMonitorStatus() {
 	var sb strings.Builder
 	sb.WriteString("📡 <b>价格监控状态</b>\n")
 	sb.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
@@ -621,17 +721,261 @@ func (b *Bot) handleMonitor() {
 		return
 	}
 
-	status := b.monitorGetter()
-	if status != "" {
+	if status := b.monitorGetter(); status != "" {
 		sb.WriteString(status)
 		sb.WriteString("\n")
 	}
-
 	if b.monitorCheck != nil {
 		sb.WriteString(b.monitorCheck())
 	}
 
 	b.sendReply(sb.String())
+}
+
+// monitorMenuText 生成监控状态 + 交易对列表
+func (b *Bot) monitorMenuText() string {
+	var sb strings.Builder
+	sb.WriteString("📡 <b>价格监控</b>\n")
+	sb.WriteString(fmt.Sprintf("📅 %s\n\n", time.Now().Format("2006-01-02 15:04:05")))
+
+	if b.monitorGetter != nil {
+		if status := b.monitorGetter(); status != "" {
+			sb.WriteString(status)
+			sb.WriteString("\n")
+		}
+	}
+
+	sb.WriteString("<b>当前监控交易对</b>\n")
+	specs := b.monitorSymbolsGetter()
+	if len(specs) == 0 {
+		sb.WriteString("（空）\n")
+	}
+	for i, spec := range specs {
+		sb.WriteString(fmt.Sprintf("%d. <code>%s</code>\n", i+1, html.EscapeString(spec)))
+	}
+	sb.WriteString("\n点击下方按钮删除交易对，或点「添加」后直接回复。")
+	return sb.String()
+}
+
+// monitorKeyboard 生成内联键盘
+func (b *Bot) monitorKeyboard() interface{} {
+	specs := b.monitorSymbolsGetter()
+	rows := make([][]inlineButton, 0, len(specs)+1)
+	for _, spec := range specs {
+		rows = append(rows, []inlineButton{{
+			Text:         "❌ " + spec,
+			CallbackData: "mondel:" + symbolPart(spec),
+		}})
+	}
+	rows = append(rows, []inlineButton{
+		{Text: "➕ 添加交易对", CallbackData: "monadd"},
+		{Text: "🔄 刷新", CallbackData: "monrefresh"},
+	})
+	return map[string]interface{}{"inline_keyboard": rows}
+}
+
+// handleCallbackQuery 处理内联按钮回调
+func (b *Bot) handleCallbackQuery(q *CallbackQuery) {
+	if q == nil || q.Message == nil {
+		return
+	}
+	if fmt.Sprintf("%d", q.Message.Chat.ID) != b.chatID {
+		log.Printf("⚠️ 忽略来自未授权聊天的回调: chatID=%d", q.Message.Chat.ID)
+		return
+	}
+
+	switch {
+	case q.Data == "monrefresh":
+		b.answerCallback(q.ID, "已刷新")
+		b.editHTMLWithMarkup(q.Message.MessageID, b.monitorMenuText(), b.monitorKeyboard())
+	case q.Data == "monadd":
+		b.answerCallback(q.ID, "请回复要添加的交易对")
+		b.promptAddSymbol()
+	case strings.HasPrefix(q.Data, "mondel:"):
+		sym := strings.TrimPrefix(q.Data, "mondel:")
+		if err := b.removeMonitorSpecs([]string{sym}); err != nil {
+			b.answerCallback(q.ID, "❌ "+err.Error())
+			return
+		}
+		b.answerCallback(q.ID, "已删除 "+sym)
+		b.editHTMLWithMarkup(q.Message.MessageID, b.monitorMenuText(), b.monitorKeyboard())
+	}
+}
+
+// promptAddSymbol 发送 ForceReply，等待用户输入交易对
+func (b *Bot) promptAddSymbol() {
+	chatIDInt, _ := strconv.ParseInt(b.chatID, 10, 64)
+	b.pendingAdd[chatIDInt] = true
+
+	markup := map[string]interface{}{
+		"force_reply":             true,
+		"selective":               true,
+		"input_field_placeholder": "例如 BTCUSDT:1h&4h",
+	}
+	text := "➕ <b>添加监控交易对</b>\n请直接回复，格式：<code>BTCUSDT:1h&amp;4h</code>\n多个用逗号分隔。发送「取消」放弃。"
+	b.sendHTMLWithMarkup(text, markup)
+}
+
+// handlePendingAdd 处理 ForceReply 返回的文本
+func (b *Bot) handlePendingAdd(text string) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return
+	}
+	if text == "取消" || strings.EqualFold(text, "cancel") {
+		b.sendReply("已取消添加")
+		return
+	}
+
+	if err := b.addMonitorSpecs(splitSpecList(text)); err != nil {
+		b.sendReply("❌ " + html.EscapeString(err.Error()))
+		return
+	}
+	b.sendHTMLWithMarkup(b.monitorMenuText(), b.monitorKeyboard())
+}
+
+// addMonitorSpecs 追加/覆盖交易对（按 symbol 去重）
+func (b *Bot) addMonitorSpecs(newSpecs []string) error {
+	if len(newSpecs) == 0 {
+		return fmt.Errorf("没有可添加的交易对")
+	}
+
+	cur := b.monitorSymbolsGetter()
+	index := make(map[string]int, len(cur))
+	for i, spec := range cur {
+		index[symbolPart(spec)] = i
+	}
+
+	added := 0
+	for _, spec := range newSpecs {
+		spec = strings.TrimSpace(spec)
+		if spec == "" {
+			continue
+		}
+		sym := symbolPart(spec)
+		if sym == "" {
+			continue
+		}
+		if i, ok := index[sym]; ok {
+			cur[i] = spec
+		} else {
+			cur = append(cur, spec)
+			index[sym] = len(cur) - 1
+		}
+		added++
+	}
+	if added == 0 {
+		return fmt.Errorf("没有可添加的交易对")
+	}
+	return b.monitorSymbolsSetter(cur)
+}
+
+// removeMonitorSpecs 按 symbol 删除交易对
+func (b *Bot) removeMonitorSpecs(symbols []string) error {
+	drop := make(map[string]bool, len(symbols))
+	for _, s := range symbols {
+		drop[symbolPart(s)] = true
+	}
+
+	cur := b.monitorSymbolsGetter()
+	out := make([]string, 0, len(cur))
+	for _, spec := range cur {
+		if !drop[symbolPart(spec)] {
+			out = append(out, spec)
+		}
+	}
+	if len(out) == len(cur) {
+		return fmt.Errorf("未找到要删除的交易对")
+	}
+	if len(out) == 0 {
+		return fmt.Errorf("至少保留一个监控交易对")
+	}
+	return b.monitorSymbolsSetter(out)
+}
+
+// splitSpecList 拆分逗号/空白分隔的交易对列表
+func splitSpecList(s string) []string {
+	fields := strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == '，' || r == ' ' || r == '\t' || r == '\n'
+	})
+	out := make([]string, 0, len(fields))
+	for _, f := range fields {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return out
+}
+
+// symbolPart 取 "BTCUSDT:1h&4h" 中的 "BTCUSDT"
+func symbolPart(spec string) string {
+	if idx := strings.Index(spec, ":"); idx >= 0 {
+		spec = spec[:idx]
+	}
+	return strings.ToUpper(strings.TrimSpace(spec))
+}
+
+// sendHTMLWithMarkup 发送 HTML 消息，可带 reply_markup
+func (b *Bot) sendHTMLWithMarkup(text string, markup interface{}) {
+	payload := map[string]interface{}{
+		"chat_id":                  b.chatID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
+	if err := b.callAPI("sendMessage", payload); err != nil {
+		log.Printf("❌ 发送消息失败: %v", err)
+	}
+}
+
+// editHTMLWithMarkup 编辑已发送的 HTML 消息
+func (b *Bot) editHTMLWithMarkup(messageID int, text string, markup interface{}) {
+	payload := map[string]interface{}{
+		"chat_id":                  b.chatID,
+		"message_id":               messageID,
+		"text":                     text,
+		"parse_mode":               "HTML",
+		"disable_web_page_preview": true,
+	}
+	if markup != nil {
+		payload["reply_markup"] = markup
+	}
+	if err := b.callAPI("editMessageText", payload); err != nil {
+		log.Printf("⚠️ 编辑消息失败: %v", err)
+	}
+}
+
+// answerCallback 回应按钮回调（避免客户端转圈）
+func (b *Bot) answerCallback(callbackID, text string) {
+	payload := map[string]interface{}{"callback_query_id": callbackID}
+	if text != "" {
+		payload["text"] = text
+	}
+	if err := b.callAPI("answerCallbackQuery", payload); err != nil {
+		log.Printf("⚠️ 回应回调失败: %v", err)
+	}
+}
+
+// callAPI 调用 Telegram Bot API
+func (b *Bot) callAPI(method string, payload map[string]interface{}) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/%s", b.botToken, method)
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	resp, err := b.client.Post(url, "application/json", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("API %s 错误 %d: %s", method, resp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 // boolToEmoji 布尔值转 emoji

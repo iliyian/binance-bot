@@ -60,6 +60,97 @@ type BollMonitorSymbolConfig struct {
 	Intervals []string // K 线级别列表，必须全部突破才触发，如 ["1h", "4h"]
 }
 
+// validBollIntervals 允许的 K 线级别
+var validBollIntervals = map[string]bool{
+	"1m": true, "3m": true, "5m": true, "15m": true, "30m": true,
+	"1h": true, "2h": true, "4h": true, "6h": true, "8h": true,
+	"12h": true, "1d": true, "3d": true, "1w": true, "1M": true,
+}
+
+// ValidBollInterval 判断 K 线级别是否受支持
+func ValidBollInterval(interval string) bool {
+	return validBollIntervals[interval]
+}
+
+// ParseBollMonitorSymbols 解析 BOLL_MONITOR_SYMBOLS 字符串。
+// 支持两种格式：
+//  1. BTCUSDT:1h&4h,ETHUSDT:15m&1h
+//  2. BTCUSDT,ETHUSDT（未指定级别时使用 defaultIntervals）
+func ParseBollMonitorSymbols(raw, defaultIntervals string) ([]BollMonitorSymbolConfig, error) {
+	var out []BollMonitorSymbolConfig
+	seen := make(map[string]bool)
+
+	for _, part := range strings.Split(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		var sc BollMonitorSymbolConfig
+		var intervalStr string
+		if idx := strings.Index(part, ":"); idx >= 0 {
+			sc.Symbol = strings.TrimSpace(part[:idx])
+			intervalStr = strings.TrimSpace(part[idx+1:])
+		} else {
+			sc.Symbol = part
+			intervalStr = strings.TrimSpace(defaultIntervals)
+		}
+
+		sc.Symbol = strings.ToUpper(sc.Symbol)
+		if !validSymbol(sc.Symbol) {
+			return nil, fmt.Errorf("无效的交易对: %q", sc.Symbol)
+		}
+		if seen[sc.Symbol] {
+			continue // 去重，保留第一次出现的配置
+		}
+		if intervalStr == "" {
+			return nil, fmt.Errorf("交易对 %s 未指定 K 线级别，且 BOLL_MONITOR_INTERVALS 未配置", sc.Symbol)
+		}
+
+		for _, iv := range strings.Split(intervalStr, "&") {
+			iv = strings.TrimSpace(iv)
+			if iv == "" {
+				continue
+			}
+			if !ValidBollInterval(iv) {
+				return nil, fmt.Errorf("交易对 %s 的 K 线级别无效: %q", sc.Symbol, iv)
+			}
+			sc.Intervals = append(sc.Intervals, iv)
+		}
+		if len(sc.Intervals) == 0 {
+			return nil, fmt.Errorf("交易对 %s 未指定有效的 K 线级别", sc.Symbol)
+		}
+
+		seen[sc.Symbol] = true
+		out = append(out, sc)
+	}
+
+	return out, nil
+}
+
+// FormatBollMonitorSymbols 将配置序列化为 .env 中使用的字符串
+func FormatBollMonitorSymbols(syms []BollMonitorSymbolConfig) string {
+	parts := make([]string, 0, len(syms))
+	for _, s := range syms {
+		parts = append(parts, s.Symbol+":"+strings.Join(s.Intervals, "&"))
+	}
+	return strings.Join(parts, ",")
+}
+
+// validSymbol 仅允许字母、数字和少数合约符号中常见的连接符
+func validSymbol(s string) bool {
+	if len(s) < 3 || len(s) > 24 {
+		return false
+	}
+	for _, r := range s {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == '_' || r == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
 // Load 从 .env 文件加载配置
 func Load() (*Config, error) {
 	// 尝试加载 .env 文件，不存在也不报错（允许纯环境变量方式）
@@ -230,29 +321,11 @@ func Load() (*Config, error) {
 
 		defaultIntervals := os.Getenv("BOLL_MONITOR_INTERVALS") // 全局默认，如 1h&4h
 
-		for _, part := range strings.Split(monSymbols, ",") {
-			part = strings.TrimSpace(part)
-			if part == "" {
-				continue
-			}
-			sc := BollMonitorSymbolConfig{}
-			if idx := strings.Index(part, ":"); idx >= 0 {
-				// 格式: BTCUSDT:1h&4h
-				sc.Symbol = strings.TrimSpace(part[:idx])
-				sc.Intervals = strings.Split(strings.TrimSpace(part[idx+1:]), "&")
-			} else {
-				// 格式: BTCUSDT，使用全局默认 intervals
-				sc.Symbol = part
-				if defaultIntervals == "" {
-					return nil, fmt.Errorf("BOLL_MONITOR_SYMBOLS 中 %s 未指定 K 线级别，且 BOLL_MONITOR_INTERVALS 未配置", part)
-				}
-				sc.Intervals = strings.Split(defaultIntervals, "&")
-			}
-			for i := range sc.Intervals {
-				sc.Intervals[i] = strings.TrimSpace(sc.Intervals[i])
-			}
-			cfg.BollMonitorSymbols = append(cfg.BollMonitorSymbols, sc)
+		parsed, err := ParseBollMonitorSymbols(monSymbols, defaultIntervals)
+		if err != nil {
+			return nil, err
 		}
+		cfg.BollMonitorSymbols = parsed
 
 		// 布林带参数
 		cfg.BollMonitorPeriod = 20

@@ -27,7 +27,9 @@ type Monitor struct {
 	notifier *telegram.Notifier
 	client   *http.Client
 
-	ws *WSClient
+	mu      sync.RWMutex
+	ws      *WSClient
+	started bool
 
 	precisionMu     sync.RWMutex
 	pricePrecisions map[string]int
@@ -43,39 +45,123 @@ func New(cfg *config.Config, notifier *telegram.Notifier) *Monitor {
 }
 
 // Start 启动实时价格监控 (WebSocket)
-func (m *Monitor) Start() {
+func (m *Monitor) Start() error {
 	if err := m.loadPricePrecisions(); err != nil {
 		log.Printf("⚠️ 获取币种价格精度失败，改用默认小数位: %v", err)
 	}
 
-	m.ws = NewWSClient(m.cfg, m.notifier, m.client, m.pricePrecisions)
-	if err := m.ws.Start(); err != nil {
-		log.Fatalf("❌ WebSocket 启动失败: %v", err)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.started {
+		return nil
 	}
+
+	w := NewWSClient(m.cfg, m.notifier, m.client, m.pricePrecisions)
+	if err := w.Start(); err != nil {
+		return fmt.Errorf("WebSocket 启动失败: %w", err)
+	}
+	m.ws = w
+	m.started = true
 
 	log.Printf("📡 价格监控已启动（WebSocket 实时模式）")
 	for _, sym := range m.cfg.BollMonitorSymbols {
 		log.Printf("📡 监控 %s，K 线: %s，布林带(%d, %.1f)",
 			sym.Symbol, strings.Join(sym.Intervals, "&"), m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev)
 	}
+	return nil
 }
 
 // Stop 停止监控
 func (m *Monitor) Stop() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.ws != nil {
 		m.ws.Stop()
+		m.ws = nil
 	}
+	m.started = false
 	log.Println("⏹ 价格监控已停止")
+}
+
+// GetSymbols 返回当前监控配置的副本
+func (m *Monitor) GetSymbols() []config.BollMonitorSymbolConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	out := make([]config.BollMonitorSymbolConfig, 0, len(m.cfg.BollMonitorSymbols))
+	for _, s := range m.cfg.BollMonitorSymbols {
+		out = append(out, config.BollMonitorSymbolConfig{
+			Symbol:    s.Symbol,
+			Intervals: append([]string(nil), s.Intervals...),
+		})
+	}
+	return out
+}
+
+// GetSymbolSpecs 返回形如 ["BTCUSDT:1h&4h", ...] 的字符串列表
+func (m *Monitor) GetSymbolSpecs() []string {
+	syms := m.GetSymbols()
+	out := make([]string, 0, len(syms))
+	for _, s := range syms {
+		out = append(out, s.Symbol+":"+strings.Join(s.Intervals, "&"))
+	}
+	return out
+}
+
+// Reload 用新的交易对列表热重启 WebSocket 监控
+func (m *Monitor) Reload(symbols []config.BollMonitorSymbolConfig) error {
+	if len(symbols) == 0 {
+		return fmt.Errorf("至少保留一个监控交易对")
+	}
+	if err := m.loadPricePrecisions(); err != nil {
+		log.Printf("⚠️ 刷新价格精度失败，沿用已有精度: %v", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.ws != nil {
+		m.ws.Stop()
+		m.ws = nil
+	}
+
+	cp := make([]config.BollMonitorSymbolConfig, 0, len(symbols))
+	for _, s := range symbols {
+		cp = append(cp, config.BollMonitorSymbolConfig{
+			Symbol:    s.Symbol,
+			Intervals: append([]string(nil), s.Intervals...),
+		})
+	}
+	m.cfg.BollMonitorSymbols = cp
+
+	w := NewWSClient(m.cfg, m.notifier, m.client, m.pricePrecisions)
+	if err := w.Start(); err != nil {
+		m.started = false
+		return fmt.Errorf("重启监控失败: %w", err)
+	}
+	m.ws = w
+	m.started = true
+
+	log.Printf("🔄 监控交易对已热更新: %s", strings.Join(m.GetSymbolSpecsLocked(), ", "))
+	return nil
+}
+
+func (m *Monitor) GetSymbolSpecsLocked() []string {
+	out := make([]string, 0, len(m.cfg.BollMonitorSymbols))
+	for _, s := range m.cfg.BollMonitorSymbols {
+		out = append(out, s.Symbol+":"+strings.Join(s.Intervals, "&"))
+	}
+	return out
 }
 
 // GetStatus 获取当前监控状态描述
 func (m *Monitor) GetStatus() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var sb strings.Builder
 	sb.WriteString("模式: WebSocket 实时\n")
 	sb.WriteString(fmt.Sprintf("布林带参数: period=%d, stddev=%.1f\n\n", m.cfg.BollMonitorPeriod, m.cfg.BollMonitorStdDev))
-	for _, sym := range m.cfg.BollMonitorSymbols {
-		sb.WriteString(fmt.Sprintf("• %s — %s\n", sym.Symbol, strings.Join(sym.Intervals, "&")))
-	}
+	sb.WriteString(fmt.Sprintf("监控交易对: %d 个\n", len(m.cfg.BollMonitorSymbols)))
 	return sb.String()
 }
 
@@ -193,6 +279,9 @@ func (m *Monitor) liveIntervals(symbol string, intervals []string) ([]IntervalRe
 
 // CheckNow 立即执行一次检查并返回格式化结果
 func (m *Monitor) CheckNow() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
 	var sb strings.Builder
 	for _, sym := range m.cfg.BollMonitorSymbols {
 		syn := resolveSynthetic(m.cfg.SyntheticPairs, sym.Symbol)
