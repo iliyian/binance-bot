@@ -289,8 +289,9 @@ func postTradeTransferType(target string) (gobinance.UserUniversalTransferType, 
 // baseAssetOf 从交易对提取基础货币，如 BTCUSDT → BTC、ETHBTC → ETH
 func baseAssetOf(symbol string) string {
 	symbol = strings.ToUpper(strings.TrimSpace(symbol))
-	// 按长度降序匹配，避免短后缀误伤
-	quotes := []string{"USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BNB", "BTC", "ETH", "EUR", "TRY"}
+	// 必须严格按长度降序：长后缀先匹配，避免短后缀误伤
+	// （如 ETHBTC 若先匹配到 BTC 之外的短串就没法正确拆出 ETH）
+	quotes := []string{"FDUSD", "USDT", "USDC", "TUSD", "BUSD", "BNB", "BTC", "ETH", "EUR", "TRY"}
 	for _, q := range quotes {
 		if strings.HasSuffix(symbol, q) && len(symbol) > len(q) {
 			return strings.TrimSuffix(symbol, q)
