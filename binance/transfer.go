@@ -62,7 +62,8 @@ func (c *Client) GetFundingBalance(ctx context.Context, asset string) (float64, 
 	params := url.Values{}
 	params.Set("asset", asset)
 
-	body, err := c.signedRequest(ctx, http.MethodGet, "/sapi/v1/asset/get-funding-asset", params)
+	// 注意: 该接口仅支持 POST，用 GET 会返回 -1000 "Request method 'GET' is not supported"
+	body, err := c.signedRequest(ctx, http.MethodPost, "/sapi/v1/asset/get-funding-asset", params)
 	if err != nil {
 		return 0, fmt.Errorf("查询资金账户余额失败: %w", err)
 	}
@@ -255,6 +256,151 @@ func (c *Client) AutoTransferIfNeeded(ctx context.Context, pairs, amounts []stri
 
 	if needAmount > 0 {
 		log.Printf("⚠️ 跨账户划转后仍缺 %.2f USDT，本次定投可能部分失败", needAmount)
+	}
+
+	return results
+}
+
+// PostTradeTransferResult 定投成交后划转结果
+type PostTradeTransferResult struct {
+	Asset  string  // 划转资产 (基础货币)
+	Amount float64 // 划转数量
+	Target string  // 目标账户描述
+	TranID int64   // 划转交易 ID
+	Error  error
+}
+
+// postTradeTransferType 目标账户 → 划转类型 / 显示名
+// 仅支持从现货账户 (MAIN) 转出
+func postTradeTransferType(target string) (gobinance.UserUniversalTransferType, string, bool) {
+	switch target {
+	case "umfuture":
+		return gobinance.UserUniversalTransferTypeMainToUmFutures, "USDT 合约账户", true
+	case "cmfuture":
+		return gobinance.UserUniversalTransferTypeMainToCmFutures, "币本位合约账户", true
+	case "margin":
+		return gobinance.UserUniversalTransferTypeMainToMargin, "全仓杠杆账户", true
+	case "funding":
+		return gobinance.UserUniversalTransferTypeMainToFunding, "资金账户", true
+	}
+	return "", "", false
+}
+
+// baseAssetOf 从交易对提取基础货币，如 BTCUSDT → BTC、ETHBTC → ETH
+func baseAssetOf(symbol string) string {
+	symbol = strings.ToUpper(strings.TrimSpace(symbol))
+	// 按长度降序匹配，避免短后缀误伤
+	quotes := []string{"USDT", "USDC", "FDUSD", "TUSD", "BUSD", "BNB", "BTC", "ETH", "EUR", "TRY"}
+	for _, q := range quotes {
+		if strings.HasSuffix(symbol, q) && len(symbol) > len(q) {
+			return strings.TrimSuffix(symbol, q)
+		}
+	}
+	return ""
+}
+
+// AutoTransferAfterTrades 定投成交后，把本次买入的基础货币从现货划转到目标账户
+// target: umfuture / cmfuture / margin / funding；assetFilter 非空时仅划转白名单资产
+// minAmount > 0 时，低于该数量的资产跳过
+// 单笔失败只记录错误，不中断后续资产
+func (c *Client) AutoTransferAfterTrades(ctx context.Context, tradeResults []*TradeResult, target string, assetFilter []string, minAmount float64) []*PostTradeTransferResult {
+	transferType, targetName, ok := postTradeTransferType(target)
+	if !ok {
+		return nil
+	}
+
+	// 统一账户模式下资产共享，无需划转
+	if c.IsUnifiedTransferEnabled(ctx) {
+		log.Printf("ℹ️ 已开启统一账户模式，定投后划转跳过 (资产在账户间共享)")
+		return nil
+	}
+
+	// 允许划转的资产白名单
+	allowed := make(map[string]bool, len(assetFilter))
+	for _, a := range assetFilter {
+		allowed[strings.ToUpper(strings.TrimSpace(a))] = true
+	}
+
+	// 汇总本次买入的基础货币数量（同一基础货币可能来自多个交易对）
+	type want struct {
+		symbol string
+		qty    float64
+	}
+	wants := make(map[string]*want)
+	var order []string
+	for _, r := range tradeResults {
+		if r.Error != nil {
+			continue
+		}
+		base := baseAssetOf(r.Symbol)
+		if base == "" {
+			continue
+		}
+		if len(allowed) > 0 && !allowed[base] {
+			continue
+		}
+		qty, err := strconv.ParseFloat(r.FilledQty, 64)
+		if err != nil || qty <= 0 {
+			continue
+		}
+		if w, exist := wants[base]; exist {
+			w.qty += qty
+		} else {
+			wants[base] = &want{symbol: r.Symbol, qty: qty}
+			order = append(order, base)
+		}
+	}
+
+	if len(order) == 0 {
+		return nil
+	}
+
+	var results []*PostTradeTransferResult
+	for _, asset := range order {
+		w := wants[asset]
+		// 以实际现货可用余额为上限，避免把历史持仓一并扫走
+		free, err := c.GetFreeBalance(ctx, asset)
+		if err != nil {
+			log.Printf("⚠️ 查询 %s 现货余额失败，跳过划转: %v", asset, err)
+			results = append(results, &PostTradeTransferResult{Asset: asset, Target: targetName, Error: err})
+			continue
+		}
+
+		amount := w.qty
+		if free < amount {
+			amount = free
+		}
+		// 截断到 8 位小数，避免浮点误差
+		amount = math.Floor(amount*1e8) / 1e8
+
+		if amount <= 0 {
+			log.Printf("ℹ️ %s 现货可用余额为 0，跳过划转", asset)
+			continue
+		}
+		if minAmount > 0 && amount < minAmount {
+			log.Printf("ℹ️ %s 划转数量 %.8f 低于门槛 %.8f，跳过", asset, amount, minAmount)
+			results = append(results, &PostTradeTransferResult{Asset: asset, Amount: amount, Target: targetName,
+				Error: fmt.Errorf("低于划转门槛 %.8f", minAmount)})
+			continue
+		}
+
+		log.Printf("🔄 定投后划转: %.8f %s → %s ...", amount, asset, targetName)
+		tranID, err := c.UniversalTransfer(ctx, transferType, asset, amount)
+		results = append(results, &PostTradeTransferResult{
+			Asset:  asset,
+			Amount: amount,
+			Target: targetName,
+			TranID: tranID,
+			Error:  err,
+		})
+		if err != nil {
+			log.Printf("❌ %s 划转到%s失败: %v", asset, targetName, err)
+			continue
+		}
+		log.Printf("✅ 已划转 %.8f %s 到%s (tranId: %d)", amount, asset, targetName, tranID)
+
+		// 等待划转到账，避免下一笔触发频率限制
+		time.Sleep(1 * time.Second)
 	}
 
 	return results

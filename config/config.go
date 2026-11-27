@@ -32,12 +32,15 @@ type Config struct {
 	TelegramChatID   string
 
 	// 可选
-	UseDemo             bool     // 使用 demo.binance.com 模拟交易
-	BinanceBaseURL      string   // 自定义 API 地址，最高优先级
-	DCAEnabled          bool     // 是否启用定投
-	AutoEarn            bool     // 自动与活期理财互转
-	AutoTransferSources []string // 现货 USDT 不足时的跨账户划转顺序 (funding/umfuture/margin)
-	LogLevel            string
+	UseDemo                 bool     // 使用 demo.binance.com 模拟交易
+	BinanceBaseURL          string   // 自定义 API 地址，最高优先级
+	DCAEnabled              bool     // 是否启用定投
+	AutoEarn                bool     // 自动与活期理财互转
+	AutoTransferSources     []string // 现货 USDT 不足时的跨账户划转顺序 (funding/umfuture/margin)
+	PostTradeTransferTarget string   // 定投成交后自动划转目标账户 (umfuture/cmfuture/margin/funding，空=关闭)
+	PostTradeTransferAssets []string // 定投后允许划转的资产白名单，空=取交易对基础币
+	PostTradeTransferMin    float64  // 定投后划转的最小数量门槛，低于则跳过
+	LogLevel                string
 
 	// 布林带价格监控
 	BollMonitorEnabled bool
@@ -258,6 +261,34 @@ func Load() (*Config, error) {
 		}
 	}
 
+	// 定投成交后自动划转目标账户
+	cfg.PostTradeTransferTarget = strings.ToLower(strings.TrimSpace(os.Getenv("POST_TRADE_TRANSFER_TARGET")))
+	if cfg.PostTradeTransferTarget == "none" || cfg.PostTradeTransferTarget == "false" || cfg.PostTradeTransferTarget == "off" {
+		cfg.PostTradeTransferTarget = ""
+	}
+	switch cfg.PostTradeTransferTarget {
+	case "", "umfuture", "cmfuture", "margin", "funding":
+	default:
+		return nil, fmt.Errorf("POST_TRADE_TRANSFER_TARGET 无效: %q (支持: umfuture, cmfuture, margin, funding, none)", cfg.PostTradeTransferTarget)
+	}
+
+	if v := strings.TrimSpace(os.Getenv("POST_TRADE_TRANSFER_ASSETS")); v != "" {
+		for _, part := range strings.Split(v, ",") {
+			part = strings.ToUpper(strings.TrimSpace(part))
+			if part != "" {
+				cfg.PostTradeTransferAssets = append(cfg.PostTradeTransferAssets, part)
+			}
+		}
+	}
+
+	if v := strings.TrimSpace(os.Getenv("POST_TRADE_TRANSFER_MIN_AMOUNT")); v != "" {
+		f, err := strconv.ParseFloat(v, 64)
+		if err != nil || f < 0 {
+			return nil, fmt.Errorf("POST_TRADE_TRANSFER_MIN_AMOUNT 无效: %s", v)
+		}
+		cfg.PostTradeTransferMin = f
+	}
+
 	cfg.LogLevel = os.Getenv("LOG_LEVEL")
 	if cfg.LogLevel == "" {
 		cfg.LogLevel = "info"
@@ -308,6 +339,9 @@ func Load() (*Config, error) {
 	}
 	if cfg.AutoEarn && cfg.UseDemo {
 		return nil, fmt.Errorf("AUTO_EARN 不能与 USE_DEMO 同时启用（模拟环境不支持理财 API）")
+	}
+	if cfg.PostTradeTransferTarget != "" && cfg.UseDemo {
+		return nil, fmt.Errorf("POST_TRADE_TRANSFER_TARGET 不能与 USE_DEMO 同时启用（模拟环境不支持划转 API）")
 	}
 
 	// 布林带价格监控配置

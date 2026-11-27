@@ -92,7 +92,7 @@ func (n *Notifier) sendMessage(text string) error {
 }
 
 // SendTradeReport 发送定投交易报告
-func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult, poolInfos []PoolInfo, transferResults []*binance.UniversalTransferResult) {
+func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance string, redeemResults, purchaseResults []*binance.EarnTransferResult, poolInfos []PoolInfo, transferResults []*binance.UniversalTransferResult, postTradeTransfers []*binance.PostTradeTransferResult) {
 	var sb strings.Builder
 
 	sb.WriteString("🤖 <b>币安自动定投报告</b>\n")
@@ -153,6 +153,19 @@ func (n *Notifier) SendTradeReport(results []*binance.TradeResult, balance strin
 			if pi.Intended > 0 && r.Error == nil {
 				sb.WriteString(fmt.Sprintf("   🎯 目标: %.8f, 实际: %.8f, 差额: %.8f\n",
 					pi.Intended, pi.Actual, pi.Intended-pi.Actual))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
+	// 定投后划转信息
+	if len(postTradeTransfers) > 0 {
+		sb.WriteString("🔄 <b>定投后划转:</b>\n")
+		for _, r := range postTradeTransfers {
+			if r.Error != nil {
+				sb.WriteString(fmt.Sprintf("   ⚠️ %s → %s: %s\n", r.Asset, r.Target, html.EscapeString(r.Error.Error())))
+			} else {
+				sb.WriteString(fmt.Sprintf("   ✅ %.8f %s → %s\n", r.Amount, r.Asset, r.Target))
 			}
 		}
 		sb.WriteString("\n")

@@ -52,6 +52,10 @@ func main() {
 	if cfg.AutoEarn {
 		log.Println("🏦 自动活期理财互转已启用")
 	}
+	if cfg.PostTradeTransferTarget != "" {
+		log.Printf("🔄 定投后自动划转: → %s (资产: %v, 最小: %.8f)",
+			cfg.PostTradeTransferTarget, cfg.PostTradeTransferAssets, cfg.PostTradeTransferMin)
+	}
 	if cfg.UseDemo {
 		log.Println("🧪 使用模拟交易模式 (demo.binance.com)")
 	}

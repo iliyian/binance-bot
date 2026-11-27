@@ -403,6 +403,12 @@ func (c *Client) AutoRedeemIfNeeded(ctx context.Context, pairs []string, amounts
 
 // AutoPurchaseToSavings 交易完成后自动将资产申购到活期理财
 func (c *Client) AutoPurchaseToSavings(ctx context.Context, tradeResults []*TradeResult) []*EarnTransferResult {
+	return c.AutoPurchaseToSavingsExcept(ctx, tradeResults, nil)
+}
+
+// AutoPurchaseToSavingsExcept 同 AutoPurchaseToSavings，但跳过 exclude 中的资产
+// 用于「定投后划转」场景：已被划走的资产不应再被申购成 LD 凭证
+func (c *Client) AutoPurchaseToSavingsExcept(ctx context.Context, tradeResults []*TradeResult, exclude map[string]bool) []*EarnTransferResult {
 	var results []*EarnTransferResult
 
 	// 收集需要申购的资产
@@ -421,6 +427,10 @@ func (c *Client) AutoPurchaseToSavings(ctx context.Context, tradeResults []*Trad
 	assetsToSave["USDT"] = true
 
 	for asset := range assetsToSave {
+		if exclude != nil && exclude[asset] {
+			log.Printf("ℹ️ %s 已划转到其他账户，跳过活期理财申购", asset)
+			continue
+		}
 		// 查询该资产在现货的可用余额
 		freeBalance, err := c.GetFreeBalance(ctx, asset)
 		if err != nil {

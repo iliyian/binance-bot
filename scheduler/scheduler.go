@@ -206,11 +206,29 @@ func (s *Scheduler) executeTrades() {
 	}
 	s.poolMu.Unlock()
 
+	// 定投成交后自动划转（例如转到 USDT 合约账户）
+	// 注意顺序：必须先于理财申购，否则资产会被 LD 凭证锁住无法划转
+	var postTradeTransfers []*binance.PostTradeTransferResult
+	// 已被划转走的资产，不应再申购成活期理财凭证
+	transferredAssets := make(map[string]bool)
+	if s.cfg.PostTradeTransferTarget != "" {
+		log.Printf("🔄 定投后划转目标: %s", s.cfg.PostTradeTransferTarget)
+		postTradeTransfers = s.client.AutoTransferAfterTrades(ctx, results, s.cfg.PostTradeTransferTarget, s.cfg.PostTradeTransferAssets, s.cfg.PostTradeTransferMin)
+		for _, r := range postTradeTransfers {
+			if r.Error == nil {
+				transferredAssets[r.Asset] = true
+			}
+		}
+		if len(transferredAssets) > 0 {
+			log.Printf("ℹ️ 已划转资产 %v，这些资产将跳过活期理财申购", keysOf(transferredAssets))
+		}
+	}
+
 	// 如果开启了自动理财互转，将交易获得的资产存入活期理财
 	var purchaseResults []*binance.EarnTransferResult
 	if s.cfg.AutoEarn {
 		log.Println("📤 将交易资产存入活期理财...")
-		purchaseResults = s.client.AutoPurchaseToSavings(ctx, results)
+		purchaseResults = s.client.AutoPurchaseToSavingsExcept(ctx, results, transferredAssets)
 	}
 
 	// 查询余额
@@ -223,7 +241,7 @@ func (s *Scheduler) executeTrades() {
 
 	// 发送 Telegram 通知
 	if s.notifier != nil {
-		s.notifier.SendTradeReport(results, balance, redeemResults, purchaseResults, poolInfos, transferResults)
+		s.notifier.SendTradeReport(results, balance, redeemResults, purchaseResults, poolInfos, transferResults, postTradeTransfers)
 	}
 
 	// 打印下次执行时间
@@ -239,4 +257,13 @@ func (s *Scheduler) executeTrades() {
 // RunOnce 手动执行一次（用于测试）
 func (s *Scheduler) RunOnce() {
 	s.executeTrades()
+}
+
+// keysOf 返回集合中的键（用于日志输出）
+func keysOf(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }

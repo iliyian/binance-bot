@@ -116,6 +116,9 @@ go build -o binance-bot .
 | `LOG_LEVEL` | ❌ | 日志级别 | `info` |
 | `AUTO_EARN` | ❌ | 自动活期理财互转 | `true` |
 | `AUTO_TRANSFER_SOURCES` | ❌ | 现货 USDT 不足时的跨账户划转顺序，逗号分隔 | `funding,umfuture,margin` |
+| `POST_TRADE_TRANSFER_TARGET` | ❌ | 定投成交后自动把买入资产从现货划转到该账户：`umfuture`/`cmfuture`/`margin`/`funding`/`none` | `umfuture` |
+| `POST_TRADE_TRANSFER_ASSETS` | ❌ | 允许划转的资产白名单（逗号分隔）；留空=仅划本次买入的基础币 | `BTC,ETH` |
+| `POST_TRADE_TRANSFER_MIN_AMOUNT` | ❌ | 划转最小数量门槛，低于则跳过（0=不设门槛） | `0` |
 | `BOLL_MONITOR_ENABLED` | ❌ | 启用布林带突破监控 | `true` |
 | `BOLL_MONITOR_SYMBOLS` | ❌ | 监控交易对及 K 线级别 | `BTCUSDT:1h&4h,ETHBTC:15m&1h` |
 | `BOLL_MONITOR_INTERVALS` | ❌ | 全局默认 K 线级别 | `1h&4h` |
@@ -233,6 +236,31 @@ sudo journalctl -u binance-bot -f    # 查看日志
 示例：`AUTO_TRANSFER_SOURCES=funding,umfuture,margin` 表示先从资金账户划，不够再从合约账户划，最后从杠杆账户划。
 
 **统一账户模式**：若账户已开启统一账户（Portfolio Margin / 统一账户计划，API 判定字段 `portiAble` / `isPortfolioMarginRetailEnabled`），各账户资产共享、现货可直接使用，机器人会自动检测并跳过划转。
+
+## 📤 定投后自动划转
+
+定投成交后，可以把本次买入的资产直接从现货账户划转到指定账户，省去手动搬砖。
+
+配置 `POST_TRADE_TRANSFER_TARGET` 即可开启：
+
+| 目标值 | 目标账户 |
+|--------|----------|
+| `umfuture` | USDT 永续合约账户 |
+| `cmfuture` | 币本位合约账户 |
+| `margin` | 全仓杠杆账户 |
+| `funding` | 资金账户 |
+| 空 / `none` | 关闭（默认） |
+
+行为说明：
+
+- **只划本次买入量**：以本次成交的基础币数量为上限，再与现货可用余额取小值，不会扫走历史持仓。
+- **资产白名单**：`POST_TRADE_TRANSFER_ASSETS=BTC,ETH` 可限定只划这些资产；留空则按交易对自动推导基础币（`BTCUSDT` → `BTC`）。
+- **数量门槛**：`POST_TRADE_TRANSFER_MIN_AMOUNT` 大于 0 时，低于该数量的资产跳过，避免小额频繁划转。
+- **与 `AUTO_EARN` 的先后**：划转在理财申购之前执行，已划走的资产会从申购列表中排除，不会被锁进 `LD*` 凭证导致划转失败。
+- **统一账户模式**：检测到统一账户（资产共享）时自动跳过划转。
+
+>
+> ⚠️ 划转 API 需要 API Key 具备「允许通用划转」权限；划转到合约账户还需该 Key 具备合约相关权限，否则会被币安拒绝。
 
 ## 🏊 Pool 差额累积
 
